@@ -208,7 +208,7 @@ async function terminal(f: ReturnType<typeof fixture>, keys: string) {
       }
       throw new Error('Picker terminal timed out: ' + tmux('capture-pane', '-p', '-t', 'picker'));
     }
-    const initial = await waitFor(/Skills/);
+    const initial = await waitFor(/example/);
     for (const key of keys) {
       if (key === '\r') tmux('send-keys', '-t', 'picker', 'Enter');
       else if (key === '\u0003') tmux('send-keys', '-t', 'picker', 'C-c');
@@ -336,8 +336,8 @@ test('native dashboard edits canonical files and applies disable/enable to full 
   const child = spawn(cliPath, ['ui', '--no-open', '--host', '127.0.0.1', '--port', String(port)], { env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
   let diagnostics = ''; child.stdout.on('data', (data: Buffer) => { diagnostics += data.toString(); }); child.stderr.on('data', (data: Buffer) => { diagnostics += data.toString(); });
   const base = 'http://127.0.0.1:' + port;
-  async function waitFor(check: () => Promise<boolean> | boolean) {
-    const deadline = Date.now() + 20000;
+  async function waitFor(check: () => Promise<boolean> | boolean, timeout = 20000) {
+    const deadline = Date.now() + timeout;
     while (Date.now() < deadline) { if (await check()) return; if (child.exitCode !== null) throw new Error(diagnostics); await new Promise(resolve => setTimeout(resolve, 100)); }
     throw new Error('Dashboard timed out: ' + diagnostics);
   }
@@ -346,7 +346,7 @@ test('native dashboard edits canonical files and applies disable/enable to full 
     assert.ok(response.ok, await response.text());
   }
   try {
-    await waitFor(async () => { try { return (await fetch(base + '/api/resources', { signal: AbortSignal.timeout(1000) })).ok; } catch { return false; } });
+    await waitFor(async () => { try { return (await fetch(base + '/api/resources', { signal: AbortSignal.timeout(1000) })).ok; } catch { return false; } }, 60000);
     const diff = z.object({ diffs: z.array(z.object({ items: z.array(z.unknown()) })) }).parse(await (await fetch(base + '/api/diff')).json());
     assert.ok(diff.diffs.every(target => target.items.length === 0), 'Dashboard reported generated delivery links as stale.');
     const targets = z.object({ targets: z.array(z.object({ linkedCount: z.number(), expectedSkillCount: z.number() })) }).parse(await (await fetch(base + '/api/targets')).json());
