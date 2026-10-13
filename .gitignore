@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+auth.json
+credentials.json
+config.yaml
+refresh-status.json
+*.lock
+*.log
+__pycache__/
+.DS_Store
