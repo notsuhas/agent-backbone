@@ -1,57 +1,59 @@
-# Shared skill backbone
+# Agent Backbone
 
-A public, curated skill source for Claude Code and Codex. Pstack is pinned to the upstream revision in `packages/pstack/PROVENANCE.json`; its MIT notice is retained in that package. Cloud skill exports and machine configuration are deliberately excluded from this repository.
-
-## Layout
-
-- `packages/pstack/`: complete plugin, including agents and support files.
-- `skills/`: portable relative links to the 52 approved Pstack skills. Optional automation packs are not exposed here.
-- `scripts/skills_refresh.py`: bounded refresh, process lock, revision and freshness tracking, and stale-cache warnings.
-- `scripts/skills_launch.py`: refresh before starting an agent; keeps stdout clean for stdio app servers.
-
-## Bootstrap on each machine
+A generic Homebrew tool for syncing skills and shared global instructions from your own Git repository. Tool code, personal content and OS dotfiles stay separate.
 
 ```sh
-git clone https://github.com/notsuhas/skill-backbone.git ~/.agents/skill-backbone
-python3 ~/.agents/skill-backbone/scripts/bootstrap.py
+brew install notsuhas/tap/agent-backbone
+agent-backbone configure you/agents
+agent-backbone status
 ```
 
-Requires Python 3, Git and curl on macOS/Linux. It installs pinned Skillshare v0.25.10 after checksum verification, configures native links, backs up replaced paths and wraps installed Claude/Codex launchers. Keep `~/.local/bin` first in PATH. It refreshes on CLI/app-server process start; already-running sessions retain their existing context.
+Homebrew owns the tool and its bundled, checksummed Skillshare engine. `brew upgrade` updates the tool; refresh fetches your selected content repository. No personal skill library is bundled.
 
-Claude also receives a native startup/resume hook. On macOS a user LaunchAgent refreshes every 15 minutes, covering long-lived processes and applications that launch their own binaries. Existing conversation context is not rewritten; newly loaded files use the refreshed library. Linux uses the launchers and Claude hook; a system timer is not installed there.
+## Content repository
 
-1. Clone this repository to a stable local directory.
-2. Install a pinned Skillshare release for that machine's OS.
-3. Initialize Skillshare with `--source <checkout>/skills --targets codex --mode merge --no-copy --no-git --no-skill`. Set `follow_source_links: true` in that machine's Skillshare config. Keep `git_root` at its default so pulls use the skills directory's enclosing Git repository.
-4. Set `git config pull.ff only` in the checkout. Publish reviewed edits from the canonical repository; never force-pull at startup.
-5. Preserve the Claude plugin as one unit: link `~/.claude/skills/pstack` to `<checkout>/packages/pstack`. Review existing installations before replacing links to avoid duplicate registrations.
-6. Link `~/.agents/packages/pstack` to the same complete package and add a host instruction to read its `HOST.md` when using Pstack. Preserve existing user instructions.
-7. Wire the refresh wrapper into Claude's startup hook or an agent launcher. For Codex, use the launcher before both CLI and app-server starts, or review/trust its native hook in `/hooks`. A hook file alone is not sufficient.
+Use `skills/` for native skill directories or relative links, `packages/` for complete plugin trees and `instructions/` for shared instructions. `backbone.json` describes them:
 
-These steps are a rollout recipe, not a statement that your current installation has been migrated. Tool authentication and required runtimes remain local to each machine.
+```json
+{
+  "schema_version": 1,
+  "skills_dir": "skills",
+  "instructions": [{"path": "instructions/global.md", "agents": ["claude", "codex"]}],
+  "packages": []
+}
+```
 
-## Refresh command
+Package fields: `name`, `path`, `claude_plugin`, `host_notes`, `local_files`, `provenance_file`, and `upstream` (`repository`, `path`, `ref`, `approved_tree`, `approved_commit`). Source pins and host adapters are data in your content repository, not built into the tool.
 
-Invoke `python3 <checkout>/scripts/skills_refresh.py --binary <absolute-skillshare-path> --repo <checkout> --state <local-state-directory>/refresh-status.json`. Configure the local Skillshare config path in the launch environment when needed.
+## Refresh and drift
 
-The wrapper records the checked-out revision, last attempt, last successful refresh and status. Failure emits a warning and retains available local skills. The timeout defaults to 20 seconds. Concurrent startups serialize through a nonblocking local lock; the second start uses the current cache.
+Refresh runs before agent CLI/app-server starts, through Claude's startup/resume hook, and every 15 minutes on macOS. Linux uses launchers/hooks unless you add a timer. Git pulls are fast-forward only. Dirty source edits prevent refresh; offline/timeout failures preserve available local files and warn. Concurrent refresh writers use a local lock; protocol stdout stays clean.
 
-For a pre-launch refresh, pass that command as a JSON argument array to `skills_launch.py --refresh-command-json '<array>' --agent-command-json '["<absolute-agent-binary>"]' -- <agent arguments>`. Use the real agent binary, not the wrapper itself.
+Full Claude plugins stay together. Ordinary skills use native symlinks. Shared instructions replace only the `agent-backbone` marked block, preserving local content and existing instruction symlinks. Only recorded links are replaced or removed; foreign installer conflicts are reported before destination changes. Full Claude plugins require a skill root separate from other agents.
 
-## Drift and upstream updates
+Choose targets with `--agents claude,codex,cursor,gemini,opencode`. Claude/Codex instruction and launch integration are verified; other targets use Skillshare's native-directory integration.
 
-Use merge/symlink delivery. Editing a managed link changes the canonical Git-tracked file; dirty sources refuse a pull. Copy targets can silently retain local edits until a later source update overwrites them, so they are unsuitable as authoring locations without a separate drift audit.
-
-Sharing an approved revision and upgrading upstream skills are separate operations. Review upstream changes, preserve licenses, run compatibility checks, update the provenance pin, then commit the approved version. Do not auto-publish arbitrary upstream changes into the shared branch.
-
-The refresh script checks the public Pstack tree at most once daily and warns when upstream changes need review. It records that check separately from machine sync freshness. An unavailable upstream check does not replace the approved skills.
+## Upstream releases and other installers
 
 ```sh
-skill-backbone status                 # revision, freshness, local edits, upstream state
-skill-backbone sync                   # refresh now
-skill-backbone skillshare list        # use the shared library configuration
+agent-backbone upstream check
+agent-backbone upstream update my-plugin
+agent-backbone inventory
+agent-backbone adopt /path/to/a/skill --name my-skill
+agent-backbone sync
+agent-backbone skillshare list
 ```
 
-Add reviewed skills to the source view in `skills/`, keeping full packages in `packages/` and using relative links. Commit with a Conventional Commit message and push to the shared branch; other bootstrapped machines receive it on refresh. A new third-party skill still needs its own license, privacy and host-compatibility review.
+Daily upstream checks flag new versions. Explicit updates change your local checkout, preserve declared adapters, validate paths/source-name conflicts, refresh the source view and update provenance. Review the Git diff and runtime compatibility before committing and pushing. Nothing is published automatically; other machines then fetch your approved revision.
 
-Keep private context, credentials, generated output and auth stores outside this public repository. Check new skills and their supporting files before publication; a generic SKILL.md does not guarantee that its examples or assets are safe to share.
+Inventory shows native locations, differing instruction bodies under the same name, and skills.sh lockfile provenance where available. It deduplicates the same physical directory and skips hidden caches/trash. Adoption copies a full skill into `packages/`, creates a source link and imports available source metadata; the original installer files remain untouched. Review license/private context and resolve duplicate registrations before publication. Choose one owner per skill.
+
+## Local state and recovery
+
+Config: `~/.config/agent-backbone/`. State/backups: `~/.local/state/agent-backbone/`. Default source checkout: `~/.local/share/agent-backbone/library/`; use `--destination` to change it. Git and agent credentials remain in their existing stores. Private repositories work with normal Git authentication.
+
+Existing sessions retain their conversation context. Backups preserve replaced links/launchers. Homebrew uninstall removes the tool, not user content; restore generated wrappers/hooks/timers before uninstalling. Public content must exclude credentials, private context and restricted vendor exports.
+
+## Development
+
+Python standard library only. Run `AGENT_BACKBONE_SKILLSHARE=/path/to/skillshare python3 -m unittest discover -s tests -v` with a trusted Skillshare binary.
