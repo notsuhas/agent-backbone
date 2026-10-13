@@ -10,32 +10,44 @@ import { roots, type Agent } from './model.js';
 
 const itemSchema = z.object({ skill: z.string(), action: z.string(), kind: z.string().optional() }).passthrough();
 const diffSchema = z.object({ target: z.string(), items: z.array(itemSchema) }).passthrough();
-function delivered(agent: Agent, id: string) {
-  const current = config(), data = manifest(current.repo), canonical = sourceSkills(current.repo, data).get(id);
-  if (!canonical) return false;
-  const root = engineTarget(nativeDocument(controlPath()), agent).path || path.join(paths().home, roots[agent]);
-  const direct = path.join(root, id), recorded = current.managed_links[direct];
-  if (recorded && exists(direct) && (real(direct) === real(recorded) || current.managed_copies[direct]) && digest(direct) === digest(canonical)) return true;
-  if (agent !== 'claude') return false;
-  for (const pkg of data.packages.filter(pkg => pkg.claude_plugin)) {
-    const relative = path.relative(real(contained(current.repo, pkg.path)), canonical);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
-    const alias = path.join(root, pkg.name), installed = path.join(alias, relative);
-    if (current.managed_links[alias] && exists(installed) && real(alias) === real(current.managed_links[alias]) && digest(installed) === digest(canonical)) return true;
+function deliveryProbe() {
+  const current = config(), data = manifest(current.repo), skills = sourceSkills(current.repo, data);
+  const native = nativeDocument(controlPath());
+  const targetRoots = new Map(current.targets.map(agent => [agent, engineTarget(native, agent).path || path.join(paths().home, roots[agent])]));
+  const plugins = data.packages.filter(pkg => pkg.claude_plugin).map(pkg => ({ name: pkg.name, root: real(contained(current.repo, pkg.path)) }));
+  const hashes = new Map<string, string>();
+  function hash(file: string) {
+    const cached = hashes.get(file);
+    if (cached) return cached;
+    const value = digest(file); hashes.set(file, value); return value;
   }
-  return false;
+  function delivered(agent: Agent, id: string) {
+    const canonical = skills.get(id), root = targetRoots.get(agent);
+    if (!canonical || !root) return false;
+    const direct = path.join(root, id), recorded = current.managed_links[direct];
+    if (recorded && exists(direct) && (real(direct) === real(recorded) || current.managed_copies[direct]) && hash(direct) === hash(canonical)) return true;
+    if (agent !== 'claude') return false;
+    for (const pkg of plugins) {
+      const relative = path.relative(pkg.root, canonical);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+      const alias = path.join(root, pkg.name), installed = path.join(alias, relative);
+      if (current.managed_links[alias] && exists(installed) && real(alias) === real(current.managed_links[alias]) && hash(installed) === hash(canonical)) return true;
+    }
+    return false;
+  }
+  return { current, skills, delivered };
 }
-function correctedTarget(value: unknown) {
-  const diff = diffSchema.parse(value), agent = config().targets.find(agent => agent === diff.target);
-  if (agent) diff.items = diff.items.filter(item => (item.kind && item.kind !== 'skill') || !['link', 'update'].includes(item.action) || !delivered(agent, item.skill));
+function correctedTarget(value: unknown, probe: ReturnType<typeof deliveryProbe>) {
+  const diff = diffSchema.parse(value), agent = probe.current.targets.find(agent => agent === diff.target);
+  if (agent) diff.items = diff.items.filter(item => (item.kind && item.kind !== 'skill') || !['link', 'update'].includes(item.action) || !probe.delivered(agent, item.skill));
   return diff;
 }
 function correctedPayload(value: unknown) {
-  const body = z.record(z.string(), z.unknown()).parse(value);
-  if (Array.isArray(body.diffs)) body.diffs = body.diffs.map(correctedTarget);
-  if (body.diff) body.diff = correctedTarget(body.diff);
+  const body = z.record(z.string(), z.unknown()).parse(value), probe = deliveryProbe();
+  if (Array.isArray(body.diffs)) body.diffs = body.diffs.map(value => correctedTarget(value, probe));
+  if (body.diff) body.diff = correctedTarget(body.diff, probe);
   if (Array.isArray(body.targets)) {
-    const current = config(), data = manifest(current.repo), skills = sourceSkills(current.repo, data);
+    const { current, skills, delivered } = probe;
     body.targets = body.targets.map(value => {
       const target = z.object({ name: z.string(), path: z.string(), expectedSkillCount: z.number().optional(), localCount: z.number().optional() }).passthrough().parse(value);
       const agent = current.targets.find(agent => agent === target.name);

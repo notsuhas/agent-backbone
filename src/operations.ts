@@ -15,6 +15,12 @@ interface IConfigure { repository: string; destination?: string; agents: string;
 async function installIntegration(current: Config, noBackground: boolean) {
   const { home, state } = paths(), bin = path.join(home, '.local/bin');
   fs.mkdirSync(bin, { recursive: true });
+  const skillshare = path.join(bin, 'skillshare');
+  const bridge = '#!/bin/sh\nexec ' + quote(current.command) + ' skillshare "$@"\n';
+  if ((exists(skillshare) || isLink(skillshare)) && (!fs.statSync(skillshare).isFile() || fs.readFileSync(skillshare).subarray(0, 512).toString() !== bridge)) {
+    fs.renameSync(skillshare, path.join(current.backup, 'original-skillshare'));
+  }
+  atomicWrite(skillshare, bridge); fs.chmodSync(skillshare, 0o755);
   for (const agent of current.targets) {
     if (!current.agents[agent]) continue;
     const file = path.join(bin, agent);

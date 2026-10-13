@@ -161,23 +161,24 @@ export async function apply(options: { repo: string; data: Manifest; agents: Age
   for (const target of Object.keys(previous?.managed_copies || {})) {
     if (!(target in desired) && exists(target) && !owned(target, previous)) throw new Error('Managed copy was edited: ' + target + '. Preserve those edits in your source before removing it.');
   }
-  const notes = new Map<string, { actual: string; text: string; updated: string; agent: string }>();
+  const notes = new Map<string, { actual: string; text: string; cleaned: string; policy: string; shared: string[]; agent: string }>();
   for (const agent of agents) {
     if (!(agent in instructionFiles)) continue;
     const noteRelative = agent === 'claude' ? instructionFiles.claude : instructionFiles.codex;
     const file = path.join(home, noteRelative), actual = isLink(file) ? real(file) : file;
     const text = exists(actual) ? fs.readFileSync(actual, 'utf8') : '';
     validateBlock(text, file);
-    const chunks = data.instructions.filter(entry => entry.agents.includes(agent)).map(entry => fs.readFileSync(contained(repo, entry.path), 'utf8').trim());
+    const chunks: string[] = [];
     for (const pkg of data.packages) if (pkg.host_notes && delivery.packages.has(pkg.name)) chunks.push('When using ' + pkg.name + ', first read ' + path.join(home, '.agents/packages', pkg.name, pkg.host_notes) + ' for host compatibility. Preserve current user instructions.');
     if (!activeAgents.includes(agent)) chunks.push('Skill delivery is disabled for this agent. Do not load shared skills through source caches or sibling references.');
     const selected = selections.get(agent);
     const omitted = [...new Set([...disabled, ...[...allSkills.keys()].filter(name => selected && !selected.has(name))])].sort();
     if (omitted.length) chunks.push('Disabled skills: ' + omitted.join(', ') + '. Do not load or invoke these skills, including through sibling references or source caches.');
     const cleaned = text.replace(/<!-- agent-backbone:begin -->[\s\S]*?<!-- agent-backbone:end -->\n?/, '').trimEnd();
-    const updated = (cleaned ? cleaned + '\n\n' : '') + START + '\n\n' + chunks.join('\n\n') + '\n\n' + END + '\n';
-    if (notes.has(actual) && notes.get(actual)?.updated !== updated) throw new Error('Agents share one instruction file but need different content: ' + actual);
-    notes.set(actual, { actual, text, updated, agent });
+    const policy = chunks.join('\n\n') + '\n';
+    const shared = data.instructions.filter(entry => entry.agents.includes(agent)).map(entry => entry.path);
+    if (notes.has(actual) && (notes.get(actual)?.policy !== policy || JSON.stringify(shared) !== JSON.stringify(notes.get(actual)?.shared))) throw new Error('Agents share one instruction file but need different content: ' + actual);
+    notes.set(actual, { actual, text, cleaned: text.includes(START) ? cleaned + '\n' : text, policy, shared, agent });
   }
   fs.mkdirSync(backup, { recursive: true });
   const backupLink = (target: string) => fs.renameSync(target, path.join(backup, path.relative(home, target).replaceAll(path.sep, '__')));
@@ -199,13 +200,32 @@ export async function apply(options: { repo: string; data: Manifest; agents: Age
     targets[agent] = { ...engineTarget(native, agent).target, skills: { ...settings, path: rootFor(agent), enabled: activeAgents.includes(agent), ...(agent === 'claude' ? { exclude: [...new Set([...excludes, ...pluginSkills])].sort() } : {}) } };
   }
   const sources = z.record(z.string(), z.unknown()).parse(native.sources || {});
-  const skillConfig = deliveryPath();
-  saveJSON(skillConfig, { ...native, sources: { ...sources, skills: delivery.sourceView }, follow_source_links: true, mode: native.mode || 'merge', targets });
-  fs.chmodSync(skillConfig, 0o600);
-  await run([engine, 'sync', '--all', '--global'], undefined, 25000, { SKILLSHARE_CONFIG: skillConfig });
-  for (const note of notes.values()) if (note.text !== note.updated) {
-    if (exists(note.actual)) fs.copyFileSync(note.actual, path.join(backup, note.agent + '-instructions.md'));
-    atomicWrite(note.actual, note.updated);
+  const extras = z.array(z.record(z.string(), z.unknown())).parse(native.extras || []).filter(extra => typeof extra.name !== 'string' || !extra.name.startsWith('agent-backbone-'));
+  for (const [index, instruction] of data.instructions.entries()) {
+    const source = contained(repo, instruction.path);
+    const targets = agents.filter(agent => instruction.agents.includes(agent) && agent in instructionFiles).map(agent => {
+      const relative = agent === 'claude' ? instructionFiles.claude : instructionFiles.codex;
+      return { path: path.dirname(path.join(home, relative)), as: path.basename(relative), mode: 'append' };
+    });
+    if (targets.length) extras.push({ name: 'agent-backbone-instructions-' + index, source: path.dirname(source), file: path.basename(source), targets });
   }
+  for (const note of notes.values()) {
+    const id = createHash('sha256').update(note.actual).digest('hex').slice(0, 16);
+    const source = path.join(paths().state, 'instructions', id + '.md');
+    if (!exists(source) || fs.readFileSync(source, 'utf8') !== note.policy) atomicWrite(source, note.policy);
+    extras.push({ name: 'agent-backbone-access-' + id, source: path.dirname(source), file: path.basename(source), targets: [{ path: path.dirname(note.actual), as: path.basename(note.actual), mode: 'append' }] });
+  }
+  const updatedNative = { ...native, extras };
+  if (JSON.stringify(updatedNative) !== JSON.stringify(native)) saveJSON(controlPath(), updatedNative);
+  fs.chmodSync(controlPath(), 0o600);
+  const skillConfig = deliveryPath();
+  saveJSON(skillConfig, { ...updatedNative, sources: { ...sources, skills: delivery.sourceView }, follow_source_links: true, mode: native.mode || 'merge', targets });
+  fs.chmodSync(skillConfig, 0o600);
+  for (const note of notes.values()) if (note.text !== note.cleaned) {
+    if (exists(note.actual)) fs.copyFileSync(note.actual, path.join(backup, note.agent + '-instructions.md'));
+    atomicWrite(note.actual, note.cleaned);
+  }
+  try { await run([engine, 'sync', '--all', '--global'], undefined, 25000, { SKILLSHARE_CONFIG: skillConfig }); }
+  catch (error) { for (const note of notes.values()) if (note.text !== note.cleaned) atomicWrite(note.actual, note.text); throw error; }
   return Object.fromEntries(Object.entries(desired).map(([target, source]) => [target, real(source)]));
 }

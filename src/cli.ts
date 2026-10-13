@@ -15,12 +15,12 @@ cli.command('configure <repository>').option('--destination <path>').option('--a
 cli.command('sync').option('--startup').action(async (options: { startup?: boolean }) => sync(!!options.startup));
 cli.command('status').action(status);
 cli.command('inventory').action(inventory);
-cli.command('skills').description('Pick skills in a terminal; list their state when piped.').option('--list', 'print skill states without opening the picker').option('--interactive', 'open the picker').action(async (options: { list?: boolean; interactive?: boolean }) => {
+cli.command('skills').description('Open Skillshare’s native manager; list state when piped.').option('--list', 'print skill states without opening the picker').option('--interactive', 'open the native manager').action(async (options: { list?: boolean; interactive?: boolean }) => {
   if (options.list && options.interactive) throw new Error('Choose --list or --interactive.');
-  if (options.interactive || (!options.list && process.stdin.isTTY && process.stdout.isTTY)) await (await import('./picker.js')).pickSkills();
+  if (options.interactive || (!options.list && process.stdin.isTTY && process.stdout.isTTY)) await (await import('./native.js')).nativeManager();
   else skills();
 });
-cli.command('manage').description('Search and toggle shared skills interactively.').action(async () => (await import('./picker.js')).pickSkills());
+cli.command('manage').description('Open Skillshare’s native skill manager.').action(async () => (await import('./native.js')).nativeManager());
 cli.command('enable <names...>').description('Expose the latest cached versions of shared skills.').action((names: string[]) => setEnabled(names, true));
 cli.command('disable <names...>').description('Hide shared skills while continuing source updates.').action((names: string[]) => setEnabled(names, false));
 cli.command('launch <agent> [arguments...]').allowUnknownOption().allowExcessArguments().passThroughOptions().action((agent: string, args: string[]) => launch(agentSchema.parse(agent), args));
@@ -38,7 +38,7 @@ for (const name of ['ui', 'audit', 'doctor', 'analyze', 'mcp', 'hooks', 'extras'
   cli.command(name + ' [arguments...]').description('Use Skillshare’s native ' + name + ' controls.').allowUnknownOption().allowExcessArguments().passThroughOptions().helpOption(false).action(async (args: string[]) => (await import('./native.js')).nativeCommand([name, ...args]));
 }
 cli.command('agents [arguments...]').description('Manage custom agents with Skillshare.').allowUnknownOption().allowExcessArguments().passThroughOptions().helpOption(false).action(async (args: string[]) => (await import('./native.js')).nativeCommand(['list', 'agents', ...args]));
-cli.command('native-manager').description('Open Skillshare’s richer terminal manager.').action(async () => (await import('./native.js')).nativeCommand(['list', '--global']));
+cli.command('native-manager').description('Open Skillshare’s native terminal manager.').action(async () => (await import('./native.js')).nativeManager());
 cli.command('skillshare [arguments...]').allowUnknownOption().allowExcessArguments().passThroughOptions().helpOption(false).action(async (args: string[]) => (await import('./native.js')).nativeCommand(args));
 try { await cli.parseAsync(); }
 catch (error) { process.stderr.write('agent-backbone: ' + (error instanceof Error ? error.message : String(error)) + '\n'); process.exitCode = 1; }

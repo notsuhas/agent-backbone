@@ -24,7 +24,7 @@ function fixture() {
   function exec(command: string, args: string[], cwd = root, success = true) {
     const result = spawnSync(command, args, { cwd, env, encoding: 'utf8', timeout: 45000 });
     if (result.error) throw result.error;
-    if (success) assert.equal(result.status, 0, result.stderr);
+    if (success) assert.equal(result.status, 0, result.stderr || result.stdout);
     else assert.notEqual(result.status, 0);
     return result;
   }
@@ -60,7 +60,9 @@ test('preserves shared instruction symlinks, assets, repeated configuration and 
   f.configure();
   for (const relative of ['.claude/CLAUDE.md', '.codex/AGENTS.md']) assert.ok(fs.lstatSync(path.join(f.home, relative)).isSymbolicLink());
   assert.match(read(global), /Local preferences survive/); assert.match(read(global), /Shared instruction v1/);
-  assert.equal(read(global).split('<!-- agent-backbone:begin -->').length, 2);
+  assert.equal(read(global).split('Shared instruction v1').length, 2);
+  assert.ok(!read(global).includes('<!-- agent-backbone:begin -->'));
+  assert.match(read(global), /<!-- skillshare:extra/);
   assert.equal(read(path.join(f.home, '.agents/skills/example/support.txt')), 'full skill asset\n');
   const before = read(global); f.configure(); assert.equal(read(global), before);
   assert.equal(f.exec(path.join(f.home, '.local/bin/codex'), ['app-server', '--stdio']).stdout.trim(), 'original codex app-server --stdio');
@@ -206,37 +208,34 @@ async function terminal(f: ReturnType<typeof fixture>, keys: string) {
       }
       throw new Error('Picker terminal timed out: ' + tmux('capture-pane', '-p', '-t', 'picker'));
     }
-    const initial = await waitFor(/Search:/);
+    const initial = await waitFor(/Skills/);
     for (const key of keys) {
       if (key === '\r') tmux('send-keys', '-t', 'picker', 'Enter');
       else if (key === '\u0003') tmux('send-keys', '-t', 'picker', 'C-c');
       else if (key === '\u0004') tmux('send-keys', '-t', 'picker', 'C-d');
       else tmux('send-keys', '-t', 'picker', '-l', key);
     }
-    const result = await waitFor(/Saved \d+ skill changes|Cancelled; no changes saved|No changes to save/);
+    const deadline = Date.now() + 15000;
+    while (tmux('display-message', '-p', '-t', 'picker', '#{pane_dead}').trim() !== '1') {
+      if (Date.now() > deadline) throw new Error('Native manager did not exit.');
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    const result = tmux('capture-pane', '-p', '-t', 'picker');
     return initial + '\n' + result;
   } finally { tmux('kill-server'); }
 }
-test('PTY picker saves a filtered toggle and hides it in both native agents', async t => {
+test('native PTY manager toggles skills and preserves full plugin filtering', async t => {
   const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
-  const output = await terminal(f, 'first \r');
-  assert.match(output, /personal: packages\/demo/); assert.match(output, /Saved 1 skill changes/);
+  const output = await terminal(f, '/first\rtq');
+  assert.match(output, /Skills/);
   assert.deepEqual(configSchema.parse(json(path.join(f.home, '.config/agent-backbone/config.json'))).disabled_skills, ['first']);
   assert.ok(!fs.existsSync(path.join(f.home, '.agents/skills/first')));
   assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
   assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/second/SKILL.md')));
-  const enabled = await terminal(f, 'first \r'); assert.match(enabled, /Saved 1 skill changes/);
+  await terminal(f, '/first\rtq');
   assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
 });
-test('PTY picker cancels pending changes and bulk toggles only filtered matches', async t => {
-  const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
-  const file = path.join(f.home, '.config/agent-backbone/config.json'), before = read(file);
-  assert.match(await terminal(f, 'first \u0003'), /Cancelled; no changes saved/); assert.equal(read(file), before);
-  assert.match(await terminal(f, 'packages/demo\u0004\r'), /Saved 2 skill changes/);
-  assert.deepEqual(configSchema.parse(parseYAML(read(file))).disabled_skills, ['first', 'second']);
-  assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/example/SKILL.md')));
-});
-test('forced picker rejects non-TTY input; explicit list works without writes', t => {
+test('native manager rejects non-TTY input; explicit list works without writes', t => {
   const f = fixture(); t.after(f.cleanup); f.configure();
   const file = path.join(f.home, '.config/agent-backbone/config.json'), before = read(file);
   assert.match(f.cliFail('manage').stderr, /interactive terminal/);
@@ -244,7 +243,7 @@ test('forced picker rejects non-TTY input; explicit list works without writes', 
   assert.match(f.cli('skills', '--list').stdout, /enabled  example/);
   assert.equal(read(file), before);
 });
-test('native Skillshare toggles share state with the picker and survive refresh', t => {
+test('native Skillshare toggles share state with the adapter and survive refresh', t => {
   const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
   f.cli('skillshare', 'disable', 'first', '--global');
   assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
@@ -316,7 +315,7 @@ test('native copy mode persists, detects local edits and removes disabled copies
   const asset = path.join(f.home, '.agents/skills/example/support.txt'); write(asset, 'Unpublished target edit');
   assert.match(f.cliFail('sync').stderr, /Unmanaged destination|edited/); assert.equal(read(asset), 'Unpublished target edit');
 });
-test('native ignore overrides do not let the checkbox picker falsely claim a toggle', t => {
+test('native ignore overrides do not let the adapter falsely claim a toggle', t => {
   const f = fixture(); t.after(f.cleanup); f.configure();
   write(path.join(f.repo, 'skills/.skillignore.local'), '!example\n');
   assert.match(f.cliFail('disable', 'example').stderr, /ignore rule overrides/);
@@ -361,6 +360,9 @@ test('native dashboard edits canonical files and applies disable/enable to full 
     assert.match(read(path.join(pkg, 'skills/first/SKILL.md')), /Edited from native dashboard/);
     write(path.join(pkg, 'skills/first/support.txt'), 'Edited canonical asset');
     await waitFor(() => read(path.join(f.home, '.agents/skills/first/support.txt')) === 'Edited canonical asset');
+    write(path.join(f.repo, 'instructions/global.md'), 'Edited shared instructions from native UI\n');
+    await waitFor(() => read(path.join(f.home, '.codex/AGENTS.md')).includes('Edited shared instructions from native UI'));
+    assert.match(read(path.join(f.home, '.claude/CLAUDE.md')), /Edited shared instructions from native UI/);
     assert.match(f.git(f.repo, 'status', '--porcelain'), /support.txt/);
     assert.ok(!/Generated skill view was edited/.test(diagnostics));
   } finally {
@@ -410,4 +412,44 @@ test('migration removes generated plugin exclusions in modern Skillshare target 
   write(delivery, JSON.stringify(document)); f.cli('sync');
   assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
   assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/second/SKILL.md')));
+});
+
+
+test('native instruction blocks migrate once and preserve edited blocks', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const file = path.join(f.home, '.codex/AGENTS.md');
+  write(file, 'Local preferences survive.\n\n<!-- agent-backbone:begin -->\nOld shared rules\n<!-- agent-backbone:end -->\n');
+  f.configure();
+  const before = read(file);
+  assert.equal(fs.statSync(path.join(f.home, '.config/agent-backbone/skillshare-control.yaml')).mode & 0o777, 0o600);
+  assert.match(before, /Local preferences survive/);
+  assert.match(before, /Shared instruction v1/);
+  assert.ok(!before.includes('Old shared rules'));
+  assert.ok(!before.includes('agent-backbone:begin'));
+  assert.equal(before.split('Shared instruction v1').length, 2);
+  write(file, before.replace('Shared instruction v1', 'Locally edited shared rule'));
+  assert.match(f.cliFail('sync').stderr, /modified|edited/i);
+  assert.match(read(file), /Locally edited shared rule/);
+});
+test('Skillshare launcher retains its previous executable and reconciles native commands', t => {
+  const f = fixture(); t.after(f.cleanup); f.plugin();
+  const launcher = path.join(f.home, '.local/bin/skillshare');
+  write(launcher, '#!/bin/sh\nprintf "old engine\\n"\n'); fs.chmodSync(launcher, 0o755);
+  f.configure();
+  const current = configSchema.parse(json(path.join(f.home, '.config/agent-backbone/config.json')));
+  assert.match(read(path.join(current.backup, 'original-skillshare')), /old engine/);
+  f.exec(launcher, ['disable', 'first', '--global']);
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+  f.exec(launcher, ['enable', 'first', '--global']);
+  assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+  f.exec(launcher, ['pull']);
+  assert.match(f.exec(launcher, ['pull', '--force'], f.root, false).stderr, /fast-forward/);
+  assert.match(f.exec(launcher, ['pull', '--help']).stdout, /fast-forward/);
+  f.configure();
+  assert.ok(fs.existsSync(path.join(current.backup, 'original-skillshare')));
+  const project = path.join(f.root, '.skillshare');
+  skill(path.join(project, 'skills/project-only'), 'project-only');
+  write(path.join(project, 'config.yaml'), JSON.stringify({ sources: { skills: path.join(project, 'skills') }, targets: ['claude'] }));
+  assert.match(f.exec(launcher, ['list', '--json']).stdout, /project-only/);
+  assert.ok(!f.exec(launcher, ['list', '--json', '--global']).stdout.includes('project-only'));
 });
