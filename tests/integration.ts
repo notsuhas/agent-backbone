@@ -346,6 +346,8 @@ test('native dashboard edits canonical files and applies disable/enable to full 
     await waitFor(async () => { try { return (await fetch(base + '/api/resources', { signal: AbortSignal.timeout(1000) })).ok; } catch { return false; } });
     const diff = z.object({ diffs: z.array(z.object({ items: z.array(z.unknown()) })) }).parse(await (await fetch(base + '/api/diff')).json());
     assert.ok(diff.diffs.every(target => target.items.length === 0), 'Dashboard reported generated delivery links as stale.');
+    const targets = z.object({ targets: z.array(z.object({ linkedCount: z.number(), expectedSkillCount: z.number() })) }).parse(await (await fetch(base + '/api/targets')).json());
+    assert.ok(targets.targets.every(target => target.linkedCount === target.expectedSkillCount), 'Dashboard summary did not recognize plugin delivery.');
     const forbidden = await fetch(base + '/api/resources/first/disable', { method: 'POST', headers: { Origin: 'https://untrusted.invalid', 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(forbidden.status, 403);
     await request('/api/resources/first/disable', 'POST', '{}');

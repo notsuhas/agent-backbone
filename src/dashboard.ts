@@ -10,34 +10,41 @@ import { roots, type Agent } from './model.js';
 
 const itemSchema = z.object({ skill: z.string(), action: z.string(), kind: z.string().optional() }).passthrough();
 const diffSchema = z.object({ target: z.string(), items: z.array(itemSchema) }).passthrough();
-function correctedTarget(value: unknown) {
-  const diff = diffSchema.parse(value), current = config(), data = manifest(current.repo), source = sourceSkills(current.repo, data);
-  const agent = current.targets.find(agent => agent === diff.target);
-  if (!agent) return diff;
+function delivered(agent: Agent, id: string) {
+  const current = config(), data = manifest(current.repo), canonical = sourceSkills(current.repo, data).get(id);
+  if (!canonical) return false;
   const root = engineTarget(nativeDocument(controlPath()), agent).path || path.join(paths().home, roots[agent]);
-  diff.items = diff.items.filter(item => {
-    if (item.kind && item.kind !== 'skill') return true;
-    if (!['link', 'update'].includes(item.action)) return true;
-    const canonical = source.get(item.skill);
-    if (!canonical) return true;
-    const direct = path.join(root, item.skill), recorded = current.managed_links[direct];
-    if (recorded && exists(direct) && real(direct) === real(recorded) && digest(direct) === digest(canonical)) return false;
-    if (agent !== 'claude') return true;
-    for (const pkg of data.packages.filter(pkg => pkg.claude_plugin)) {
-      const packageRoot = real(contained(current.repo, pkg.path));
-      const relative = path.relative(packageRoot, canonical);
-      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
-      const alias = path.join(root, pkg.name), installed = path.join(alias, relative);
-      if (current.managed_links[alias] && exists(installed) && real(alias) === real(current.managed_links[alias]) && digest(installed) === digest(canonical)) return false;
-    }
-    return true;
-  });
+  const direct = path.join(root, id), recorded = current.managed_links[direct];
+  if (recorded && exists(direct) && (real(direct) === real(recorded) || current.managed_copies[direct]) && digest(direct) === digest(canonical)) return true;
+  if (agent !== 'claude') return false;
+  for (const pkg of data.packages.filter(pkg => pkg.claude_plugin)) {
+    const relative = path.relative(real(contained(current.repo, pkg.path)), canonical);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    const alias = path.join(root, pkg.name), installed = path.join(alias, relative);
+    if (current.managed_links[alias] && exists(installed) && real(alias) === real(current.managed_links[alias]) && digest(installed) === digest(canonical)) return true;
+  }
+  return false;
+}
+function correctedTarget(value: unknown) {
+  const diff = diffSchema.parse(value), agent = config().targets.find(agent => agent === diff.target);
+  if (agent) diff.items = diff.items.filter(item => (item.kind && item.kind !== 'skill') || !['link', 'update'].includes(item.action) || !delivered(agent, item.skill));
   return diff;
 }
 function correctedPayload(value: unknown) {
   const body = z.record(z.string(), z.unknown()).parse(value);
   if (Array.isArray(body.diffs)) body.diffs = body.diffs.map(correctedTarget);
   if (body.diff) body.diff = correctedTarget(body.diff);
+  if (Array.isArray(body.targets)) {
+    const current = config(), data = manifest(current.repo), skills = sourceSkills(current.repo, data);
+    body.targets = body.targets.map(value => {
+      const target = z.object({ name: z.string(), path: z.string(), expectedSkillCount: z.number().optional(), localCount: z.number().optional() }).passthrough().parse(value);
+      const agent = current.targets.find(agent => agent === target.name);
+      if (!agent) return target;
+      const count = [...skills.keys()].filter(id => delivered(agent, id)).length;
+      const physical = Object.keys(current.managed_links).filter(file => path.dirname(file) === target.path && exists(file)).length;
+      return { ...target, linkedCount: count, localCount: Math.max(0, (target.localCount || 0) - physical), status: count === target.expectedSkillCount ? 'linked' : 'has files' };
+    });
+  }
   return body;
 }
 export async function dashboardProxy(args: string[]) {
@@ -62,7 +69,7 @@ export async function dashboardProxy(args: string[]) {
     if (origin && ![frontURL, 'http://localhost:' + port].includes(origin)) { outgoing.writeHead(403); outgoing.end('Invalid dashboard origin.'); return; }
     const headers = { ...incoming.headers, host: '127.0.0.1:' + backendPort, ...(origin ? { origin: backendURL } : {}) };
     const upstream = request({ hostname: '127.0.0.1', port: backendPort, path: incoming.url, method: incoming.method, headers }, response => {
-      const isDiff = incoming.method === 'GET' && /\/api\/diff(?:\?|$)/.test(incoming.url || '');
+      const isDiff = incoming.method === 'GET' && /\/api\/(?:diff|targets)(?:\?|$)/.test(incoming.url || '');
       const isStream = incoming.method === 'GET' && /\/api\/diff\/stream(?:\?|$)/.test(incoming.url || '');
       if (!isDiff && !isStream) { outgoing.writeHead(response.statusCode || 502, response.headers); response.pipe(outgoing); return; }
       const filteredHeaders = { ...response.headers }; delete filteredHeaders['content-length'];
