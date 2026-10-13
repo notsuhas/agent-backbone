@@ -29,7 +29,7 @@ Package fields: `name`, `path`, `claude_plugin`, `host_notes`, `local_files`, `p
 
 Refresh runs before agent CLI/app-server starts, through Claude's startup/resume hook, and every 15 minutes on macOS. Linux uses launchers/hooks unless you add a timer. Git pulls are fast-forward only. Dirty source edits prevent refresh; offline/timeout failures preserve available local files and warn. Concurrent refresh writers use a local lock; protocol stdout stays clean.
 
-Full Claude plugins stay together. Ordinary skills use native symlinks. Shared instructions replace only the `agent-backbone` marked block, preserving local content and existing instruction symlinks. Only recorded links are replaced or removed; foreign installer conflicts are reported before destination changes. Full Claude plugins require a skill root separate from other agents.
+Full Claude plugins stay together. Native symlinks expose a generated view of complete packages. Disabled skill directories are omitted from that view, including Claude plugins. Generated edits are detected; author changes in the source repository. Shared instructions replace only the `agent-backbone` marked block, preserving local content and existing instruction symlinks. Only recorded links are replaced or removed; foreign installer conflicts are reported before destination changes. Full Claude plugins require a skill root separate from other agents.
 
 Choose targets with `--agents claude,codex,cursor,gemini,opencode`. Claude/Codex instruction and launch integration are verified; other targets use Skillshare's native-directory integration.
 
@@ -48,6 +48,18 @@ Daily upstream checks flag new versions. Explicit updates change your local chec
 
 Inventory shows native locations, differing instruction bodies under the same name, and skills.sh lockfile provenance where available. It deduplicates the same physical directory and skips hidden caches/trash. Adoption copies a full skill into `packages/`, creates a source link and imports available source metadata; the original installer files remain untouched. Review license/private context and resolve duplicate registrations before publication. Choose one owner per skill.
 
+## Enable and disable skills
+
+```sh
+agent-backbone skills
+agent-backbone disable poteto-mode
+agent-backbone enable poteto-mode
+```
+
+Selection is persistent per machine and applies to all configured agent targets. Disabled skills stay in the source repository and keep receiving approved updates, but disappear from native skill discovery and filtered plugin packages. Enabling exposes the latest cached version. Toggles work offline and survive refresh and reconfiguration. Start a new agent session to reload skills; current sessions keep their existing context. Other installers' duplicate copies remain their responsibility.
+
+For CI, `agent-backbone upstream update --all --repository .` updates declared packages without configuring agents or needing Skillshare. `agent-backbone validate --repository .` checks package paths, links and skill metadata before an update PR is opened.
+
 ## Local state and recovery
 
 Config: `~/.config/agent-backbone/`. State/backups: `~/.local/state/agent-backbone/`. Default source checkout: `~/.local/share/agent-backbone/library/`; use `--destination` to change it. Git and agent credentials remain in their existing stores. Private repositories work with normal Git authentication.
@@ -56,4 +68,4 @@ Existing sessions retain their conversation context. Backups preserve replaced l
 
 ## Development
 
-Python standard library only. Run `AGENT_BACKBONE_SKILLSHARE=/path/to/skillshare python3 -m unittest discover -s tests -v` with a trusted Skillshare binary.
+TypeScript compiled to bundled JavaScript on Node 22.16+. Run `npm ci --ignore-scripts`, then `AGENT_BACKBONE_SKILLSHARE=/path/to/skillshare npm test` with a trusted Skillshare binary. `npm run typecheck` checks the source without building.

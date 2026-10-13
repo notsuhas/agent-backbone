@@ -9,3 +9,7 @@ refresh-status.json
 *.log
 __pycache__/
 .DS_Store
+node_modules/
+dist/
+!package-lock.json
+vendor/
