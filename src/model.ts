@@ -1,18 +1,19 @@
 import { z } from 'zod';
 
-export const VERSION = '0.5.0';
+export const VERSION = '0.5.1';
 export const roots = { claude: '.claude/skills', codex: '.agents/skills', cursor: '.cursor/skills', gemini: '.gemini/skills', opencode: '.config/opencode/skills' };
 export const instructionFiles = { claude: '.claude/CLAUDE.md', codex: '.codex/AGENTS.md' };
 export const agentSchema = z.enum(['claude', 'codex', 'cursor', 'gemini', 'opencode']);
 export type Agent = z.infer<typeof agentSchema>;
 const slug = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
+const skillID = z.string().refine(value => !value.includes('\\') && !value.includes('\0') && value.split('/').every(part => !!part && part !== '.' && part !== '..'));
 const upstreamSchema = z.object({ repository: z.string(), path: z.string().default('.'), ref: z.string().default('main'), approved_tree: z.string().optional(), approved_commit: z.string().optional() });
 const packageSchema = z.object({ name: slug, path: z.string(), claude_plugin: z.boolean().default(false), host_notes: z.string().optional(), local_files: z.array(z.string()).default([]), provenance_file: z.string().optional(), upstream: upstreamSchema.optional() });
 export const manifestSchema = z.object({ schema_version: z.literal(1), skills_dir: z.string().default('skills'), packages: z.array(packageSchema).default([]), instructions: z.array(z.object({ path: z.string(), agents: z.array(agentSchema).default(['claude', 'codex']) })).default([]) });
 export type Manifest = z.infer<typeof manifestSchema>;
 export type Package = z.infer<typeof packageSchema>;
 export type Upstream = z.infer<typeof upstreamSchema>;
-export const configSchema = z.object({ repo: z.string(), agents: z.record(z.string(), z.string()).default({}), targets: z.array(agentSchema), engine: z.string(), command: z.string(), managed_links: z.record(z.string(), z.string()).default({}), managed_copies: z.record(z.string(), z.string()).default({}), disabled_skills: z.array(slug).default([]), interval: z.number().int().min(60).default(900), backup: z.string().default('') });
+export const configSchema = z.object({ repo: z.string(), agents: z.record(z.string(), z.string()).default({}), targets: z.array(agentSchema), engine: z.string(), command: z.string(), managed_links: z.record(z.string(), z.string()).default({}), managed_copies: z.record(z.string(), z.string()).default({}), managed_source_hashes: z.record(z.string(), z.string()).default({}), disabled_skills: z.array(skillID).default([]), interval: z.number().int().min(60).default(900), backup: z.string().default('') });
 export type Config = z.infer<typeof configSchema>;
 export const healthSchema = z.object({ status: z.enum(['current', 'stale']).optional(), reason: z.string().nullable().optional(), last_attempt: z.number().optional(), last_success: z.number().optional(), revision: z.string().optional() });
 const checkSchema = z.object({ checked_at: z.number(), latest_tree: z.string().optional(), approved_tree: z.string().optional(), status: z.enum(['current', 'review_available']).optional(), check_status: z.literal('unavailable').optional() });

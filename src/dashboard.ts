@@ -14,6 +14,12 @@ function deliveryProbe() {
   const current = config(), data = manifest(current.repo), skills = sourceSkills(current.repo, data);
   const native = nativeDocument(controlPath());
   const targetRoots = new Map(current.targets.map(agent => [agent, engineTarget(native, agent).path || path.join(paths().home, roots[agent])]));
+  const canonicalSources = new Set(skills.values());
+  const nativeTargets = new Map<Agent, Map<string, string>>();
+  for (const agent of current.targets) {
+    const entries = Object.entries(current.managed_links).filter(([file, source]) => path.dirname(file) === targetRoots.get(agent) && canonicalSources.has(real(source)));
+    nativeTargets.set(agent, new Map(entries.map(([file, source]) => [real(source), file])));
+  }
   const plugins = data.packages.filter(pkg => pkg.claude_plugin).map(pkg => ({ name: pkg.name, root: real(contained(current.repo, pkg.path)) }));
   const hashes = new Map<string, string>();
   function hash(file: string) {
@@ -22,10 +28,17 @@ function deliveryProbe() {
     const value = digest(file); hashes.set(file, value); return value;
   }
   function delivered(agent: Agent, id: string) {
-    const canonical = skills.get(id), root = targetRoots.get(agent);
+    const root = targetRoots.get(agent);
+    if (!root) return false;
+    const aliasSource = current.managed_links[path.join(root, id)];
+    const canonical = skills.get(id) || (aliasSource && canonicalSources.has(real(aliasSource)) ? real(aliasSource) : undefined);
     if (!canonical || !root) return false;
-    const direct = path.join(root, id), recorded = current.managed_links[direct];
-    if (recorded && exists(direct) && (real(direct) === real(recorded) || current.managed_copies[direct]) && hash(direct) === hash(canonical)) return true;
+    const direct = nativeTargets.get(agent)?.get(canonical) || path.join(root, id), recorded = current.managed_links[direct];
+    if (recorded && exists(direct)) {
+      const copy = current.managed_copies[direct];
+      if (copy && hash(direct) === copy && hash(canonical) === current.managed_source_hashes[direct]) return true;
+      if ((real(direct) === real(recorded) || copy) && hash(direct) === hash(canonical)) return true;
+    }
     if (agent !== 'claude') return false;
     for (const pkg of plugins) {
       const relative = path.relative(pkg.root, canonical);

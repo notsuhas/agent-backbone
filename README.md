@@ -40,6 +40,8 @@ Tool code, shared content and OS dotfiles stay separate. A content repository ha
 
 Package declarations support `name`, `path`, `claude_plugin`, `host_notes`, `local_files`, `provenance_file` and `upstream` (`repository`, `path`, `ref`, `approved_tree`, `approved_commit`). Full packages retain their licenses, scripts, references and host adapters. Disabled skills keep receiving approved source updates but are omitted from delivery. Start a new agent session after changing selection.
 
+Native installs into nested folders and tracked repository folders retain their source IDs and assets. The engine resolves target names and filters; flat, standard and prefixed copy naming are verified. Repository-level ignores remain absent from delivery.
+
 Selection and target preferences are per machine, in `~/.config/agent-backbone/skillshare-control.yaml`. Local ignore files are excluded from Git. `agents/`, `extras/` and `mcp.yaml` can hold portable shared definitions; credentials and OAuth state stay local. Existing installer-owned skills and foreign MCP servers are preserved. The default checkout is `~/.local/share/agent-backbone/library/`.
 
 Shared instruction files are native single-file extras in append mode. Their dashboard entries point to canonical Git files. Generated extras named `agent-backbone-*` provide instruction bindings and package access policy; change their content sources or skill/target selection rather than editing generated bindings. Legacy Backbone instruction blocks migrate once to Skillshare blocks. Local text and instruction symlinks remain; a hand-edited Skillshare block is flagged and preserved.

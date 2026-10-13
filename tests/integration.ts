@@ -325,7 +325,11 @@ test('native ignore overrides do not let the adapter falsely claim a toggle', t 
 });
 
 test('native dashboard edits canonical files and applies disable/enable to full plugins', async t => {
-  const f = fixture(); t.after(f.cleanup); const pkg = f.plugin(); f.configure();
+  const f = fixture(); t.after(f.cleanup); const pkg = f.plugin();
+  skill(path.join(f.repo, 'skills/frontend/nested-ui'), 'nested-ui');
+  const tracked = path.join(f.repo, 'skills/_team');
+  skill(path.join(tracked, 'skills/visible'), 'visible'); f.git(tracked, 'init', '-b', 'main'); f.commit(tracked);
+  f.push(); f.configure();
   const reservation = createServer(); await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
   const address = reservation.address(); assert.ok(address && typeof address !== 'string'); const port = address.port;
   await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
@@ -364,6 +368,14 @@ test('native dashboard edits canonical files and applies disable/enable to full 
     await waitFor(() => read(path.join(f.home, '.codex/AGENTS.md')).includes('Edited shared instructions from native UI'));
     assert.match(read(path.join(f.home, '.claude/CLAUDE.md')), /Edited shared instructions from native UI/);
     assert.match(f.git(f.repo, 'status', '--porcelain'), /support.txt/);
+    const control = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');
+    const doc = z.record(z.string(), z.unknown()).parse(parseYAML(read(control)));
+    doc.mode = 'copy'; doc.target_naming = 'prefixed'; write(control, JSON.stringify(doc));
+    await waitFor(() => fs.existsSync(path.join(f.home, '.agents/skills/team-visible/SKILL.md')));
+    await waitFor(async () => {
+      const summary = z.object({ targets: z.array(z.object({ linkedCount: z.number(), expectedSkillCount: z.number() })) }).parse(await (await fetch(base + '/api/targets')).json());
+      return summary.targets.every(target => target.linkedCount === target.expectedSkillCount);
+    });
     assert.ok(!/Generated skill view was edited/.test(diagnostics));
   } finally {
     child.kill('SIGINT');
@@ -452,4 +464,44 @@ test('Skillshare launcher retains its previous executable and reconciles native 
   write(path.join(project, 'config.yaml'), JSON.stringify({ sources: { skills: path.join(project, 'skills') }, targets: ['claude'] }));
   assert.match(f.exec(launcher, ['list', '--json']).stdout, /project-only/);
   assert.ok(!f.exec(launcher, ['list', '--json', '--global']).stdout.includes('project-only'));
+});
+
+
+test('native nested installs keep their assets, selections and target names', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  const imported = path.join(f.root, 'nested-skill'); skill(imported, 'nested-skill');
+  const launcher = path.join(f.home, '.local/bin/skillshare');
+  f.exec(launcher, ['install', imported, '--into', 'frontend', '--global']);
+  assert.equal(read(path.join(f.home, '.agents/skills/frontend__nested-skill/support.txt')), 'full skill asset\n');
+  f.exec(launcher, ['disable', 'frontend/nested-skill', '--global']);
+  assert.ok(!fs.existsSync(path.join(f.home, '.agents/skills/frontend__nested-skill')));
+  f.exec(launcher, ['enable', 'frontend/nested-skill', '--global']);
+  assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/frontend__nested-skill/SKILL.md')));
+  skill(path.join(f.repo, 'skills/.system/hidden-skill'), 'hidden-skill');
+  f.push(); f.cli('sync');
+  assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/.system__hidden-skill/SKILL.md')));
+  assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/frontend__nested-skill/SKILL.md')));
+});
+
+test('tracked repository folders retain native names and ignored skills stay absent', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const tracked = path.join(f.repo, 'skills/_team');
+  skill(path.join(tracked, 'skills/visible'), 'visible'); skill(path.join(tracked, 'skills/ignored'), 'ignored');
+  f.git(tracked, 'init', '-b', 'main');
+  write(path.join(tracked, '.skillignore'), 'skills/ignored\n');
+  f.configure();
+  assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/_team__skills__visible/SKILL.md')));
+  assert.ok(!fs.existsSync(path.join(f.home, '.agents/skills/_team__skills__ignored')));
+  f.cli('skillshare', 'disable', '_team/skills/visible', '--global');
+  assert.ok(!fs.existsSync(path.join(f.home, '.agents/skills/_team__skills__visible')));
+  f.cli('skillshare', 'enable', '_team/skills/visible', '--global');
+  assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/_team__skills__visible/SKILL.md')));
+  const file = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');
+  for (const [naming, name] of [['standard', 'visible'], ['prefixed', 'team-visible']]) {
+    const doc = z.record(z.string(), z.unknown()).parse(parseYAML(read(file)));
+    doc.target_naming = naming;
+    if (naming === 'prefixed') doc.mode = 'copy';
+    write(file, JSON.stringify(doc)); f.configure();
+    assert.ok(fs.existsSync(path.join(f.home, '.agents/skills', name || '', 'SKILL.md')));
+  }
 });

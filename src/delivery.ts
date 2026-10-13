@@ -39,15 +39,22 @@ export function manifest(repo: string): Manifest {
 }
 export function sourceSkills(repo: string, data: Manifest) {
   const source = contained(repo, data.skills_dir), skills = new Map<string, string>();
-  for (const entry of fs.readdirSync(source)) {
-    const dir = path.join(source, entry);
-    if (exists(path.join(dir, 'SKILL.md')) && fs.statSync(dir).isDirectory()) {
-      if (!inside(repo, dir)) throw new Error('Skill link escapes the repository: ' + entry);
-      if (!/^[a-z0-9][a-z0-9-]*$/.test(entry)) throw new Error('Skill IDs must be lowercase slugs: ' + entry);
+  function discover(dir: string, ancestors: Set<string>) {
+    if (!inside(repo, dir)) throw new Error('Skill link escapes the repository: ' + path.relative(source, dir));
+    const actual = real(dir);
+    if (ancestors.has(actual)) throw new Error('Source directory link cycle: ' + dir);
+    if (dir !== source && exists(path.join(dir, 'SKILL.md'))) {
       validateLinks(dir, repo);
-      skills.set(entry, real(dir));
+      skills.set(path.relative(source, dir).split(path.sep).join('/'), actual); return;
+    }
+    const next = new Set([...ancestors, actual]);
+    for (const entry of fs.readdirSync(dir).sort()) {
+      if (['.git', 'node_modules', '__pycache__'].includes(entry)) continue;
+      const child = path.join(dir, entry);
+      if (exists(child) && fs.statSync(child).isDirectory()) discover(child, next);
     }
   }
+  discover(source, new Set());
   return skills;
 }
 function owned(target: string, previous?: Config) {
@@ -104,21 +111,62 @@ function projection(repo: string, data: Manifest, disabled: Set<string>) {
     const link = path.join(sourceView, name);
     if (isLink(link) && real(link) === real(dir)) continue;
     if (exists(link) || isLink(link)) throw new Error('Generated source view was edited: ' + link);
+    fs.mkdirSync(path.dirname(link), { recursive: true });
     fs.symlinkSync(dir, link, 'dir');
   }
-  if (fs.readdirSync(sourceView).some(name => !activeSkills.has(name))) throw new Error('Generated source view has unmanaged content: ' + sourceView);
+  const librarySource = contained(repo, data.skills_dir);
+  for (const id of activeSkills.keys()) {
+    const top = id.split('/')[0];
+    if (!top || !top.startsWith('_')) continue;
+    const metadata = path.join(librarySource, top, '.git'), link = path.join(sourceView, top, '.git');
+    if (exists(metadata) && !exists(link)) { fs.mkdirSync(path.dirname(link), { recursive: true }); fs.symlinkSync(metadata, link); }
+  }
+  const expected = new Set<string>();
+  for (const name of activeSkills.keys()) {
+    let file = path.join(sourceView, name);
+    while (file !== sourceView) { expected.add(file); file = path.dirname(file); }
+  }
+  if (walk(sourceView).some(file => !expected.has(file))) throw new Error('Generated source view has unmanaged content: ' + sourceView);
   return { skills: activeSkills, packages, sourceView };
 }
-async function selectedForTarget(repo: string, data: Manifest, settings: Record<string, unknown>, engine: string, ignore: unknown) {
-  const include = z.array(z.string()).parse(settings.include || []), exclude = z.array(z.string()).parse(settings.exclude || []);
-  const skills = sourceSkills(repo, data);
-  if (!include.length && !exclude.length) return new Set(skills.keys());
+async function selectedForTarget(options: { repo: string; data: Manifest; agent: Agent; settings: Record<string, unknown>; engine: string; ignore: unknown; targetNaming: unknown }) {
+  const { repo, data, agent, settings, engine, ignore, targetNaming } = options;
+  const source = contained(repo, data.skills_dir), skills = sourceSkills(repo, data);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'backbone-filter-'));
   try {
     const target = path.join(temp, 'target'), file = path.join(temp, 'config.yaml');
-    saveJSON(file, { sources: { skills: contained(repo, data.skills_dir) }, follow_source_links: true, mode: 'merge', ignore: ignore || [], targets: { probe: { skills: { ...settings, path: target, enabled: true } } } });
+    const prefixed = (settings.target_naming || targetNaming) === 'prefixed';
+    const probeSource = prefixed ? path.join(temp, 'source') : source;
+    if (prefixed) {
+      for (const [id, canonical] of skills) {
+        const stub = path.join(probeSource, id);
+        atomicWrite(path.join(stub, 'SKILL.md'), fs.readFileSync(path.join(canonical, 'SKILL.md'), 'utf8'));
+        atomicWrite(path.join(stub, 'BACKBONE_SOURCE_ID'), id);
+      }
+      for (const entry of walk(source).filter(file => ['.skillignore', '.skillignore.local', '.skillshare-targets.json'].includes(path.basename(file)))) {
+        atomicWrite(path.join(probeSource, path.relative(source, entry)), fs.readFileSync(entry, 'utf8'));
+      }
+      for (const top of fs.readdirSync(source).filter(name => name.startsWith('_'))) {
+        const metadata = path.join(source, top, '.git');
+        if (exists(metadata)) { fs.mkdirSync(path.join(probeSource, top), { recursive: true }); fs.symlinkSync(metadata, path.join(probeSource, top, '.git')); }
+      }
+    }
+    saveJSON(file, { sources: { skills: probeSource }, follow_source_links: true, mode: 'merge', target_naming: targetNaming || 'flat', ignore: ignore || [], targets: { [agent]: { skills: { ...settings, path: target, mode: prefixed ? 'copy' : 'merge', enabled: true } } } });
     await run([engine, 'sync', 'skills', '--global'], undefined, 25000, { SKILLSHARE_CONFIG: file });
-    return new Set(exists(target) ? fs.readdirSync(target).filter(name => skills.has(name)) : []);
+    const selected = new Map<string, string>();
+    for (const name of exists(target) ? fs.readdirSync(target) : []) {
+      const link = path.join(target, name);
+      if (prefixed) {
+        const marker = path.join(link, 'BACKBONE_SOURCE_ID');
+        if (exists(marker)) { const id = fs.readFileSync(marker, 'utf8'); if (skills.has(id)) selected.set(id, name); }
+        continue;
+      }
+      if (!isLink(link)) continue;
+      const lexical = path.relative(source, path.resolve(target, fs.readlinkSync(link))).split(path.sep).join('/');
+      const id = skills.has(lexical) ? lexical : [...skills].find(([id, canonical]) => canonical === real(link) && (id === name || !selected.has(id)))?.[0];
+      if (id) selected.set(id, name);
+    }
+    return selected;
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 function validateBlock(text: string, file: string) {
@@ -137,16 +185,16 @@ export async function apply(options: { repo: string; data: Manifest; agents: Age
     for (const [name, dir] of sourceSkills(repo, data)) if (inside(source, dir)) pluginSkills.add(name);
   }
   if (pluginSkills.size && activeAgents.includes('claude') && activeAgents.some(agent => agent !== 'claude' && real(rootFor(agent)) === real(rootFor('claude')))) throw new Error('Claude shares its skill root with another agent. Full-plugin delivery needs separate roots; existing dotfiles are untouched.');
-  const selections = new Map<Agent, Set<string>>(), deliveries = new Map<Agent, ReturnType<typeof projection>>();
+  const selections = new Map<Agent, Map<string, string>>(), deliveries = new Map<Agent, ReturnType<typeof projection>>();
   const allSkills = sourceSkills(repo, data);
   for (const agent of activeAgents) {
-    const selected = await selectedForTarget(repo, data, engineTarget(native, agent).settings, engine, native.ignore);
+    const selected = await selectedForTarget({ repo, data, agent, settings: engineTarget(native, agent).settings, engine, ignore: native.ignore, targetNaming: native.target_naming });
     selections.set(agent, selected);
     const omitted = new Set([...disabled, ...[...allSkills.keys()].filter(name => !selected.has(name))]);
     deliveries.set(agent, projection(repo, data, omitted));
   }
   const desired: Record<string, string> = {};
-  for (const agent of activeAgents) for (const [name, source] of deliveries.get(agent)?.skills || []) if (agent !== 'claude' || !pluginSkills.has(name)) desired[path.join(rootFor(agent), name)] = source;
+  for (const agent of activeAgents) for (const [name, source] of deliveries.get(agent)?.skills || []) if (agent !== 'claude' || !pluginSkills.has(name)) desired[path.join(rootFor(agent), selections.get(agent)?.get(name) || name)] = source;
   for (const pkg of data.packages) {
     const source = delivery.packages.get(pkg.name);
     if (!source) continue;
@@ -196,7 +244,7 @@ export async function apply(options: { repo: string; data: Manifest; agents: Age
   const targets = z.record(z.string(), z.unknown()).parse(native.targets || {});
   for (const agent of agents) {
     const settings = engineTarget(native, agent).settings;
-    const excludes = z.array(z.string()).parse(settings.exclude || []);
+    const excludes = [...z.array(z.string()).parse(settings.exclude || []), ...[...allSkills.keys()].filter(id => !selections.get(agent)?.has(id))];
     targets[agent] = { ...engineTarget(native, agent).target, skills: { ...settings, path: rootFor(agent), enabled: activeAgents.includes(agent), ...(agent === 'claude' ? { exclude: [...new Set([...excludes, ...pluginSkills])].sort() } : {}) } };
   }
   const sources = z.record(z.string(), z.unknown()).parse(native.sources || {});

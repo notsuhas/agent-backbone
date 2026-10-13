@@ -8,8 +8,10 @@ import { digest, paths, exists, real, isLink, readJSON, saveJSON, run, commandPa
 import { upstreamCheck } from './upstream.js';
 import { createHash } from 'node:crypto';
 
-function copiedTargets(links: Record<string, string>) {
-  return Object.fromEntries(Object.keys(links).filter(target => exists(target) && !isLink(target) && fs.statSync(target).isDirectory()).map(target => [target, digest(target)]));
+function recordCopies(current: Config) {
+  const entries = Object.entries(current.managed_links).filter(([target]) => exists(target) && !isLink(target) && fs.statSync(target).isDirectory());
+  current.managed_copies = Object.fromEntries(entries.map(([target]) => [target, digest(target)]));
+  current.managed_source_hashes = Object.fromEntries(entries.map(([target, source]) => [target, digest(source)]));
 }
 interface IConfigure { repository: string; destination?: string; agents: string; interval: number; noBackground: boolean }
 async function installIntegration(current: Config, noBackground: boolean) {
@@ -80,7 +82,7 @@ export async function configure(options: IConfigure) {
       else if (found) originals[agent] = found;
     }
     const current = configSchema.parse({ repo, agents: originals, targets: agents, engine, command: commandPath(), managed_links: managed, disabled_skills: disabled, interval: options.interval, backup });
-    current.managed_copies = copiedTargets(current.managed_links);
+    recordCopies(current);
     saveJSON(path.join(directory, 'config.json'), current);
     await installIntegration(current, options.noBackground);
     process.stdout.write('Configured ' + repo + ' for ' + agents.join(', ') + '. Backups: ' + backup + '\n');
@@ -98,7 +100,7 @@ export async function sync(startup = false) {
       current.engine = enginePath();
       current.disabled_skills = await engineSelection(current, data);
       current.managed_links = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('sync-backup'), engine: current.engine, disabled: current.disabled_skills });
-      current.managed_copies = copiedTargets(current.managed_links);
+      recordCopies(current);
     saveJSON(path.join(directory, 'config.json'), current);
       health.status = 'current'; health.reason = null; health.last_success = Date.now() / 1000;
       await upstreamCheck(current.repo, data, false, true);
@@ -117,7 +119,7 @@ export async function reconcileEngine() {
     const current = config(), data = manifest(current.repo);
     current.disabled_skills = await engineSelection(current, data);
     current.managed_links = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('native-backup'), engine: enginePath(), disabled: current.disabled_skills });
-    current.managed_copies = copiedTargets(current.managed_links);
+    recordCopies(current);
     saveJSON(path.join(paths().directory, 'config.json'), current);
   });
 }
@@ -129,7 +131,7 @@ export async function setSkillSelection(changes: ReadonlyMap<string, boolean>) {
     const selection = await engineToggle(current, data, changes);
     const managed = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('toggle-backup'), engine: enginePath(), disabled: selection });
     current.disabled_skills = selection; current.managed_links = managed;
-    current.managed_copies = copiedTargets(current.managed_links);
+    recordCopies(current);
     saveJSON(path.join(paths().directory, 'config.json'), current);
   });
 }
