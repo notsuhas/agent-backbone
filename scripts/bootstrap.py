@@ -49,6 +49,9 @@ elif not binary.exists() or subprocess.run([str(binary),'version'],capture_outpu
 skill_config=config_dir/'skillshare.yaml'
 if skill_config.exists():shutil.copy2(skill_config,backup/'skillshare.yaml')
 skill_config.write_text('source: '+json.dumps(str(repo/'skills'))+'\nfollow_source_links: true\nmode: merge\ntargets:\n  codex:\n    path: '+json.dumps(str(home/'.agents/skills'))+'\nignore:\n  - .DS_Store\n  - .git/\n  - __pycache__/\n')
+default_config=home/'.config/skillshare/config.yaml'
+if not default_config.exists() and not default_config.is_symlink():
+    default_config.parent.mkdir(parents=True,exist_ok=True);default_config.symlink_to(skill_config)
 env=os.environ.copy();env['SKILLSHARE_CONFIG']=str(skill_config)
 subprocess.run(['git','-C',str(repo),'config','pull.ff','only'],check=True)
 subprocess.run([str(binary),'sync','--global'],env=env,check=True)
@@ -82,6 +85,9 @@ for agent in ['codex','claude']:
     launcher.chmod(0o755)
 host={'repo':str(repo),'skillshare_config':str(skill_config),'skillshare_binary':str(binary),'state':str(state_dir/'refresh-status.json'),'agents':real,'backup':str(backup)}
 host_file.write_text(json.dumps(host,indent=2)+'\n')
+manager=bin_dir/'skill-backbone'
+manager.write_text('#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nh=json.loads((Path.home()/".config/skill-backbone/host.json").read_text())\nos.execv(sys.executable,[sys.executable,h["repo"]+"/scripts/manage.py",*sys.argv[1:]])\n')
+manager.chmod(0o755)
 refresh_helper=bin_dir/'skill-backbone-refresh'
 refresh_helper.write_text('#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nh=json.loads((Path.home()/".config/skill-backbone/host.json").read_text())\nos.environ["SKILLSHARE_CONFIG"]=h["skillshare_config"]\nos.execv(sys.executable,[sys.executable,h["repo"]+"/scripts/skills_refresh.py","--binary",h["skillshare_binary"],"--repo",h["repo"],"--state",h["state"]])\n')
 refresh_helper.chmod(0o755)

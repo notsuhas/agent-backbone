@@ -46,4 +46,12 @@ Sharing an approved revision and upgrading upstream skills are separate operatio
 
 The refresh script checks the public Pstack tree at most once daily and warns when upstream changes need review. It records that check separately from machine sync freshness. An unavailable upstream check does not replace the approved skills.
 
+```sh
+skill-backbone status                 # revision, freshness, local edits, upstream state
+skill-backbone sync                   # refresh now
+skill-backbone skillshare list        # use the shared library configuration
+```
+
+Add reviewed skills to the source view in `skills/`, keeping full packages in `packages/` and using relative links. Commit with a Conventional Commit message and push to the shared branch; other bootstrapped machines receive it on refresh. A new third-party skill still needs its own license, privacy and host-compatibility review.
+
 Keep private context, credentials, generated output and auth stores outside this public repository. Check new skills and their supporting files before publication; a generic SKILL.md does not guarantee that its examples or assets are safe to share.
