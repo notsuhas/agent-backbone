@@ -51,10 +51,13 @@ Inventory shows native locations, differing instruction bodies under the same na
 ## Enable and disable skills
 
 ```sh
-agent-backbone skills
+agent-backbone skills        # interactive picker in a terminal
+agent-backbone skills --list # plain list
 agent-backbone disable poteto-mode
 agent-backbone enable poteto-mode
 ```
+
+The picker searches skill IDs, descriptions and source labels. Arrow keys move, Space toggles and Enter saves all changes together. Ctrl-A enables filtered matches; Ctrl-D disables them. Esc clears a search or cancels; Ctrl-C cancels without saving. `agent-backbone manage` always opens the picker. Piped `skills` output stays plain text. Only Backbone-managed skills are selectable; `inventory` also reports installer-owned copies.
 
 Selection is persistent per machine and applies to all configured agent targets. Disabled skills stay in the source repository and keep receiving approved updates, but disappear from native skill discovery and filtered plugin packages. Enabling exposes the latest cached version. Toggles work offline and survive refresh and reconfiguration. Start a new agent session to reload skills; current sessions keep their existing context. Other installers' duplicate copies remain their responsibility.
 
@@ -68,4 +71,4 @@ Existing sessions retain their conversation context. Backups preserve replaced l
 
 ## Development
 
-TypeScript compiled to bundled JavaScript on Node 22.16+. Run `npm ci --ignore-scripts`, then `AGENT_BACKBONE_SKILLSHARE=/path/to/skillshare npm test` with a trusted Skillshare binary. `npm run typecheck` checks the source without building.
+TypeScript compiled to bundled JavaScript on Node 22.16+. Run `npm ci --ignore-scripts`, then `AGENT_BACKBONE_SKILLSHARE=/path/to/skillshare npm test` with a trusted Skillshare binary and `tmux` installed for terminal tests. `npm run typecheck` checks the source without building.

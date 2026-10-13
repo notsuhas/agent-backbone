@@ -187,3 +187,58 @@ test('package-relative asset links survive; source links cannot escape the repos
   fs.symlinkSync(outside, path.join(f.repo, 'skills/example/outside.txt'));
   assert.match(f.cliFail('validate', '--repository', f.repo).stderr, /external link/);
 });
+async function terminal(f: ReturnType<typeof fixture>, keys: string) {
+  const socket = path.join(f.root, 'tmux.sock');
+  const tmux = (...args: string[]) => f.exec('tmux', ['-S', socket, ...args]).stdout;
+  const quote = (text: string) => "'" + text.replaceAll("'", "'\\''") + "'";
+  tmux('new-session', '-d', '-s', 'picker', '-x', '100', '-y', '24', '/bin/sh');
+  try {
+    tmux('set-option', '-t', 'picker', 'remain-on-exit', 'on');
+    tmux('send-keys', '-t', 'picker', 'exec ' + quote(cliPath) + ' manage', 'Enter');
+    async function waitFor(pattern: RegExp) {
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        const screen = tmux('capture-pane', '-p', '-t', 'picker');
+        if (pattern.test(screen)) return screen;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      throw new Error('Picker terminal timed out: ' + tmux('capture-pane', '-p', '-t', 'picker'));
+    }
+    const initial = await waitFor(/Search:/);
+    for (const key of keys) {
+      if (key === '\r') tmux('send-keys', '-t', 'picker', 'Enter');
+      else if (key === '\u0003') tmux('send-keys', '-t', 'picker', 'C-c');
+      else if (key === '\u0004') tmux('send-keys', '-t', 'picker', 'C-d');
+      else tmux('send-keys', '-t', 'picker', '-l', key);
+    }
+    const result = await waitFor(/Saved \d+ skill changes|Cancelled; no changes saved|No changes to save/);
+    return initial + '\n' + result;
+  } finally { tmux('kill-server'); }
+}
+test('PTY picker saves a filtered toggle and hides it in both native agents', async t => {
+  const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
+  const output = await terminal(f, 'first \r');
+  assert.match(output, /personal: packages\/demo/); assert.match(output, /Saved 1 skill changes/);
+  assert.deepEqual(configSchema.parse(json(path.join(f.home, '.config/agent-backbone/config.json'))).disabled_skills, ['first']);
+  assert.ok(!fs.existsSync(path.join(f.home, '.agents/skills/first')));
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+  assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/second/SKILL.md')));
+  const enabled = await terminal(f, 'first \r'); assert.match(enabled, /Saved 1 skill changes/);
+  assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+});
+test('PTY picker cancels pending changes and bulk toggles only filtered matches', async t => {
+  const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
+  const file = path.join(f.home, '.config/agent-backbone/config.json'), before = read(file);
+  assert.match(await terminal(f, 'first \u0003'), /Cancelled; no changes saved/); assert.equal(read(file), before);
+  assert.match(await terminal(f, 'packages/demo\u0004\r'), /Saved 2 skill changes/);
+  assert.deepEqual(configSchema.parse(json(file)).disabled_skills, ['first', 'second']);
+  assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/example/SKILL.md')));
+});
+test('forced picker rejects non-TTY input; explicit list works without writes', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  const file = path.join(f.home, '.config/agent-backbone/config.json'), before = read(file);
+  assert.match(f.cliFail('manage').stderr, /interactive terminal/);
+  assert.match(f.cliFail('skills', '--interactive').stderr, /interactive terminal/);
+  assert.match(f.cli('skills', '--list').stdout, /enabled  example/);
+  assert.equal(read(file), before);
+});

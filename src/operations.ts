@@ -96,18 +96,22 @@ export async function sync(startup = false) {
     saveJSON(path.join(state, 'status.json'), health);
   }, startup);
 }
-export async function setEnabled(names: string[], enabled: boolean) {
+export async function setSkillSelection(changes: ReadonlyMap<string, boolean>) {
+  if (!changes.size) return;
   await locked(async () => {
     const current = config(), data = manifest(current.repo), skills = sourceSkills(current.repo, data);
-    for (const name of names) if (!skills.has(name) && !current.disabled_skills.includes(name)) throw new Error('Unknown shared skill: ' + name + '. Use agent-backbone skills.');
+    for (const name of changes.keys()) if (!skills.has(name) && !current.disabled_skills.includes(name)) throw new Error('Unknown shared skill: ' + name + '. Use agent-backbone skills.');
     const disabled = new Set(current.disabled_skills);
-    for (const name of names) { if (enabled) disabled.delete(name); else disabled.add(name); }
+    for (const [name, enabled] of changes) { if (enabled) disabled.delete(name); else disabled.add(name); }
     const selection = [...disabled].sort();
     const managed = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('toggle-backup'), engine: enginePath(), disabled: selection });
     current.disabled_skills = selection; current.managed_links = managed;
     saveJSON(path.join(paths().directory, 'config.json'), current);
-    process.stdout.write((enabled ? 'Enabled ' : 'Disabled ') + names.join(', ') + '. Disabled sources keep updating. Start a new agent session to reload skills.\n');
   });
+}
+export async function setEnabled(names: string[], enabled: boolean) {
+  await setSkillSelection(new Map(names.map(name => [name, enabled])));
+  process.stdout.write((enabled ? 'Enabled ' : 'Disabled ') + names.join(', ') + '. Disabled sources keep updating. Start a new agent session to reload skills.\n');
 }
 export function skills() {
   const current = config(), available = sourceSkills(current.repo, manifest(current.repo));

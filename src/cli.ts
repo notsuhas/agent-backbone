@@ -15,7 +15,12 @@ cli.command('configure <repository>').option('--destination <path>').option('--a
 cli.command('sync').option('--startup').action(async (options: { startup?: boolean }) => sync(!!options.startup));
 cli.command('status').action(status);
 cli.command('inventory').action(inventory);
-cli.command('skills').description('List shared skills and their local enabled state.').action(skills);
+cli.command('skills').description('Pick skills in a terminal; list their state when piped.').option('--list', 'print skill states without opening the picker').option('--interactive', 'open the picker').action(async (options: { list?: boolean; interactive?: boolean }) => {
+  if (options.list && options.interactive) throw new Error('Choose --list or --interactive.');
+  if (options.interactive || (!options.list && process.stdin.isTTY && process.stdout.isTTY)) await (await import('./picker.js')).pickSkills();
+  else skills();
+});
+cli.command('manage').description('Search and toggle shared skills interactively.').action(async () => (await import('./picker.js')).pickSkills());
 cli.command('enable <names...>').description('Expose the latest cached versions of shared skills.').action((names: string[]) => setEnabled(names, true));
 cli.command('disable <names...>').description('Hide shared skills while continuing source updates.').action((names: string[]) => setEnabled(names, false));
 cli.command('launch <agent> [arguments...]').allowUnknownOption().allowExcessArguments().passThroughOptions().action((agent: string, args: string[]) => launch(agentSchema.parse(agent), args));
