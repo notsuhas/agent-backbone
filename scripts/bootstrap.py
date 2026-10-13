@@ -1,5 +1,5 @@
 """Install the shared library on macOS/Linux, preserving replaced paths as backups."""
-import argparse, hashlib, json, os, platform, shutil, subprocess, tarfile, tempfile, time
+import argparse, hashlib, json, os, platform, plistlib, shutil, subprocess, tarfile, tempfile, time
 from pathlib import Path
 
 VERSION='0.25.10'
@@ -82,6 +82,27 @@ for agent in ['codex','claude']:
     launcher.chmod(0o755)
 host={'repo':str(repo),'skillshare_config':str(skill_config),'skillshare_binary':str(binary),'state':str(state_dir/'refresh-status.json'),'agents':real,'backup':str(backup)}
 host_file.write_text(json.dumps(host,indent=2)+'\n')
+refresh_helper=bin_dir/'skill-backbone-refresh'
+refresh_helper.write_text('#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nh=json.loads((Path.home()/".config/skill-backbone/host.json").read_text())\nos.environ["SKILLSHARE_CONFIG"]=h["skillshare_config"]\nos.execv(sys.executable,[sys.executable,h["repo"]+"/scripts/skills_refresh.py","--binary",h["skillshare_binary"],"--repo",h["repo"],"--state",h["state"]])\n')
+refresh_helper.chmod(0o755)
+settings=home/'.claude/settings.json'
+doc=json.loads(settings.read_text()) if settings.exists() else {}
+entries=doc.setdefault('hooks',{}).setdefault('SessionStart',[])
+command=str(refresh_helper)
+if not any(hook.get('command')==command for entry in entries for hook in entry.get('hooks',[])):
+    if settings.exists():shutil.copy2(settings,backup/'claude-settings.json')
+    entries.append({'matcher':'startup|resume','hooks':[{'type':'command','command':command,'timeout':30}]})
+    settings.write_text(json.dumps(doc,indent=2)+'\n')
+# Periodic refresh covers long-lived agent processes that bypass CLI wrappers.
+if platform.system()=='Darwin':
+    agents=home/'Library/LaunchAgents';agents.mkdir(parents=True,exist_ok=True)
+    label='ai.skill-backbone.refresh';plist=agents/(label+'.plist')
+    if plist.exists():shutil.copy2(plist,backup/'refresh-launchagent.plist')
+    plist.write_bytes(plistlib.dumps({'Label':label,'ProgramArguments':[shutil.which('python3'),str(refresh_helper)],'StartInterval':900,'RunAtLoad':True,'StandardOutPath':str(state_dir/'background-refresh.log'),'StandardErrorPath':str(state_dir/'background-refresh-error.log')}))
+    domain='gui/'+str(os.getuid())
+    subprocess.run(['launchctl','bootout',domain+'/'+label],capture_output=True)
+    loaded=subprocess.run(['launchctl','bootstrap',domain,str(plist)],capture_output=True)
+    if loaded.returncode:print('Periodic refresh could not load in this GUI session; pre-launch refresh remains enabled.')
 subprocess.run(['python3',str(repo/'scripts/skills_refresh.py'),'--binary',str(binary),'--repo',str(repo),'--state',host['state']],env=env,check=True)
 print('Installed shared Pstack library and pre-launch refresh for: '+', '.join(real))
 print('Backups: '+str(backup))

@@ -18,6 +18,8 @@ python3 ~/.agents/skill-backbone/scripts/bootstrap.py
 
 Requires Python 3, Git and curl on macOS/Linux. It installs pinned Skillshare v0.25.10 after checksum verification, configures native links, backs up replaced paths and wraps installed Claude/Codex launchers. Keep `~/.local/bin` first in PATH. It refreshes on CLI/app-server process start; already-running sessions retain their existing context.
 
+Claude also receives a native startup/resume hook. On macOS a user LaunchAgent refreshes every 15 minutes, covering long-lived processes and applications that launch their own binaries. Existing conversation context is not rewritten; newly loaded files use the refreshed library. Linux uses the launchers and Claude hook; a system timer is not installed there.
+
 1. Clone this repository to a stable local directory.
 2. Install a pinned Skillshare release for that machine's OS.
 3. Initialize Skillshare with `--source <checkout>/skills --targets codex --mode merge --no-copy --no-git --no-skill`. Set `follow_source_links: true` in that machine's Skillshare config. Keep `git_root` at its default so pulls use the skills directory's enclosing Git repository.
