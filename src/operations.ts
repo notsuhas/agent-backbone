@@ -6,6 +6,7 @@ import { VERSION, roots, agentSchema, configSchema, healthSchema, checksSchema, 
 import { config, previousConfig, manifest, sourceSkills, apply } from './delivery.js';
 import { digest, paths, exists, real, isLink, readJSON, saveJSON, run, commandPath, enginePath, quote, repositoryURL, atomicWrite, which, backupDir, locked, walk } from './files.js';
 import { upstreamCheck } from './upstream.js';
+import { syncRuntimes } from './runtimes.js';
 import { createHash } from 'node:crypto';
 
 function recordCopies(current: Config) {
@@ -70,6 +71,7 @@ export async function configure(options: IConfigure) {
     await run(['git', 'config', 'pull.ff', 'only'], repo);
     const backup = backupDir('backup'), engine = enginePath();
     const seed = configSchema.parse({ ...previous, repo, targets: agents, engine, command: commandPath() });
+    await syncRuntimes(seed);
     await prepareEngine(seed, data);
     const disabled = await engineSelection(seed, data);
     const managed = await apply({ repo, data, agents, ...(previous ? { previous } : {}), backup, engine, disabled });
@@ -97,6 +99,7 @@ export async function sync(startup = false) {
       if (await run(['git', 'status', '--porcelain'], current.repo)) throw new Error('Unpublished local edits; commit/push or stash them before refreshing.');
       await run(['git', 'pull', '--ff-only'], current.repo, 15000);
       const data = manifest(current.repo);
+      await syncRuntimes(current);
       current.engine = enginePath();
       current.disabled_skills = await engineSelection(current, data);
       current.managed_links = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('sync-backup'), engine: current.engine, disabled: current.disabled_skills });

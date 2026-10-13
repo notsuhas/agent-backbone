@@ -7,13 +7,13 @@ case "$(uname -m)" in
   *) exit 1 ;;
 esac
 case "$TASK_ENGINE_OS/$TASK_ENGINE_ARCH" in
-  darwin/arm64) TASK_ENGINE_SHA=1f6ada0546d4007d6520fb063e8f2dcb00f3e1833a26845ed7a96f8f59cfd46f ;;
-  darwin/amd64) TASK_ENGINE_SHA=399a2e82d08423080c4cf797ff68e566b08c4e6ed3d42c5d34af4b02dc8ac7fb ;;
-  linux/arm64) TASK_ENGINE_SHA=323544db97a37a59969f29c9c1a87fa0278939ae7d40c92e4e5f28c55ca10060 ;;
-  linux/amd64) TASK_ENGINE_SHA=ce2220d8a32e01ae319dda4a3ce8db10e90a5c9fd67fc2a0995d4e6e40e50d29 ;;
+  darwin/arm64) TASK_ENGINE_SHA=4e7bec76c49fea9cacef3076cc7b668262ca3655eac3583872f870d2dc4fc496 ;;
+  darwin/amd64) TASK_ENGINE_SHA=783903b2d6e7e357678a7ac9a61bf10e673cc572aa2c1b1619b17fe02258ea0d ;;
+  linux/arm64) TASK_ENGINE_SHA=562e8f8ebd06df200e1e56266cdad3822781d183ae6696d7b09e37b2e6003994 ;;
+  linux/amd64) TASK_ENGINE_SHA=2ae0f8fce4ecd79be6ff44cc6423d03fbd80ac89b825104bae1afc9580a66b5d ;;
   *) exit 1 ;;
 esac
 mkdir -p vendor
-curl --fail --location --silent --show-error "https://github.com/runkids/skillshare/releases/download/v0.25.10/skillshare_0.25.10_${TASK_ENGINE_OS}_${TASK_ENGINE_ARCH}.tar.gz" -o vendor/engine.tar.gz
+curl --fail --location --silent --show-error "https://github.com/runkids/skillshare/releases/download/v0.25.11/skillshare_0.25.11_${TASK_ENGINE_OS}_${TASK_ENGINE_ARCH}.tar.gz" -o vendor/engine.tar.gz
 printf '%s  %s\n' "$TASK_ENGINE_SHA" vendor/engine.tar.gz | shasum -a 256 -c -
 tar -xzf vendor/engine.tar.gz -C vendor skillshare

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { z } from 'zod';
+import { parse } from 'yaml';
 import { type Manifest, type Package, type Upstream, checksSchema, installerSchema } from './model.js';
 import { manifest } from './delivery.js';
 import { repositoryURL, paths, contained, inside, real, isLink, exists, readJSON, saveJSON, run, walk, validateLinks, backupDir } from './files.js';
@@ -9,6 +10,7 @@ import { repositoryURL, paths, contained, inside, real, isLink, exists, readJSON
 async function clone(upstream: Upstream, destination: string) {
   await run(['git', 'clone', '--depth', '1', '--filter=blob:none', '--sparse', '--branch', upstream.ref, upstream.repository, destination], undefined, 60000);
   if (upstream.path !== '.') await run(['git', 'sparse-checkout', 'set', '--', upstream.path], destination);
+  else await run(['git', 'sparse-checkout', 'disable'], destination);
 }
 async function tree(upstream: Upstream) {
   const match = /^https:\/\/github.com\/([^/]+\/[^/]+?)(?:\.git)?$/.exec(upstream.repository);
@@ -65,6 +67,11 @@ async function updatePackage(repo: string, data: Manifest, pkg: Package) {
     const owned = new Set(fs.readdirSync(view).filter(name => isLink(path.join(view, name)) && inside(destination, path.join(view, name))));
     const core = exists(path.join(staged, 'skills')) ? path.join(staged, 'skills') : staged;
     const candidates = exists(path.join(core, 'SKILL.md')) ? [{ name: pkg.name, relative: path.relative(staged, core) }] : walk(core).filter(file => path.basename(file) === 'SKILL.md').map(file => ({ name: path.basename(path.dirname(file)), relative: path.relative(staged, path.dirname(file)) }));
+    if (pkg.skill_naming === 'frontmatter') for (const candidate of candidates) {
+      const text = fs.readFileSync(path.join(staged, candidate.relative, 'SKILL.md'), 'utf8');
+      const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
+      candidate.name = z.object({ name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/) }).parse(frontmatter ? parse(frontmatter) : {}).name;
+    }
     const names = new Set<string>();
     for (const candidate of candidates) {
       if (!/^[a-z0-9][a-z0-9-]*$/.test(candidate.name) || names.has(candidate.name) || ((exists(path.join(view, candidate.name)) || isLink(path.join(view, candidate.name))) && !owned.has(candidate.name))) throw new Error('New upstream skill conflicts with an existing source entry: ' + candidate.name);

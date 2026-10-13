@@ -33,7 +33,10 @@ export function manifest(repo: string): Manifest {
     if (pkg.provenance_file) contained(repo, path.join(pkg.path, pkg.provenance_file), false);
     if (pkg.upstream) contained(repo, pkg.upstream.path, false);
   }
-  for (const instruction of data.instructions) contained(repo, instruction.path);
+  for (const instruction of data.instructions) {
+    contained(repo, instruction.path);
+    if (instruction.mode === 'symlink' && data.instructions.some(other => other !== instruction && other.agents.some(agent => instruction.agents.includes(agent)))) throw new Error('A linked global instruction file must be the only instruction source for its agents.');
+  }
   sourceSkills(repo, data);
   return data;
 }
@@ -211,8 +214,9 @@ export async function apply(options: { repo: string; data: Manifest; agents: Age
   }
   const notes = new Map<string, { actual: string; text: string; cleaned: string; policy: string; shared: string[]; agent: string }>();
   for (const agent of agents) {
-    if (!(agent in instructionFiles)) continue;
-    const noteRelative = agent === 'claude' ? instructionFiles.claude : instructionFiles.codex;
+    if (data.instructions.some(entry => entry.mode === 'symlink' && entry.agents.includes(agent))) continue;
+    const noteRelative = instructionFiles[agent];
+    if (!noteRelative) continue;
     const file = path.join(home, noteRelative), actual = isLink(file) ? real(file) : file;
     const text = exists(actual) ? fs.readFileSync(actual, 'utf8') : '';
     validateBlock(text, file);
@@ -251,9 +255,10 @@ export async function apply(options: { repo: string; data: Manifest; agents: Age
   const extras = z.array(z.record(z.string(), z.unknown())).parse(native.extras || []).filter(extra => typeof extra.name !== 'string' || !extra.name.startsWith('agent-backbone-'));
   for (const [index, instruction] of data.instructions.entries()) {
     const source = contained(repo, instruction.path);
-    const targets = agents.filter(agent => instruction.agents.includes(agent) && agent in instructionFiles).map(agent => {
-      const relative = agent === 'claude' ? instructionFiles.claude : instructionFiles.codex;
-      return { path: path.dirname(path.join(home, relative)), as: path.basename(relative), mode: 'append' };
+    const targets = agents.filter(agent => instruction.agents.includes(agent)).flatMap(agent => {
+      const relative = instructionFiles[agent];
+      if (!relative) return [];
+      return [{ path: path.dirname(path.join(home, relative)), as: path.basename(relative), mode: instruction.mode }];
     });
     if (targets.length) extras.push({ name: 'agent-backbone-instructions-' + index, source: path.dirname(source), file: path.basename(source), targets });
   }
@@ -273,7 +278,10 @@ export async function apply(options: { repo: string; data: Manifest; agents: Age
     if (exists(note.actual)) fs.copyFileSync(note.actual, path.join(backup, note.agent + '-instructions.md'));
     atomicWrite(note.actual, note.cleaned);
   }
-  try { await run([engine, 'sync', '--all', '--global'], undefined, 25000, { SKILLSHARE_CONFIG: skillConfig }); }
+  try {
+    await run([engine, 'sync', 'mcp', '--global'], undefined, 25000, { SKILLSHARE_CONFIG: controlPath() });
+    for (const resource of [[], ['agents'], ['extras'], ['hooks']]) await run([engine, 'sync', ...resource, '--global'], undefined, 25000, { SKILLSHARE_CONFIG: skillConfig });
+  }
   catch (error) { for (const note of notes.values()) if (note.text !== note.cleaned) atomicWrite(note.actual, note.text); throw error; }
   return Object.fromEntries(Object.entries(desired).map(([target, source]) => [target, real(source)]));
 }

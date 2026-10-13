@@ -261,7 +261,7 @@ test('native MCP definitions persist across refresh and preserve foreign servers
   write(path.join(f.home, '.claude.json'), JSON.stringify({ mcpServers: { foreign: { type: 'http', url: 'https://foreign.invalid/mcp' } } }));
   write(path.join(f.home, '.codex/config.toml'), '[mcp_servers.foreign]\nurl = "https://foreign.invalid/mcp"\n');
   const auth = path.join(f.home, '.codex/auth.json'); write(auth, '{"fixture":"credential remains local"}');
-  f.cli('mcp', 'add', 'shared', '--url', 'https://docs.invalid/mcp', '--target', 'claude', '--target', 'codex', '--no-tui');
+  f.cli('mcp', 'add', 'shared', '--url', 'https://docs.invalid/mcp', '--target', 'claude', '--target', 'codex', '--sync', '--no-tui');
   f.cli('sync'); f.configure();
   const claude = z.object({ mcpServers: z.record(z.string(), z.unknown()) }).parse(json(path.join(f.home, '.claude.json')));
   assert.ok(claude.mcpServers.shared); assert.ok(claude.mcpServers.foreign);
@@ -504,4 +504,69 @@ test('tracked repository folders retain native names and ignored skills stay abs
     write(file, JSON.stringify(doc)); f.configure();
     assert.ok(fs.existsSync(path.join(f.home, '.agents/skills', name || '', 'SKILL.md')));
   }
+});
+
+test('default targets include OpenCode skills and preserve its local instructions', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
+  data.instructions = [{ path: 'instructions/global.md', agents: ['claude', 'codex', 'opencode'], mode: 'append' }];
+  write(path.join(f.repo, 'backbone.json'), JSON.stringify(data)); f.push();
+  const local = path.join(f.home, '.config/opencode/AGENTS.md'); write(local, 'Local OpenCode preference.\n');
+  f.configure();
+  const current = configSchema.parse(json(path.join(f.home, '.config/agent-backbone/config.json')));
+  assert.deepEqual(current.targets, ['claude', 'codex', 'opencode']);
+  assert.ok(fs.existsSync(path.join(f.home, '.config/opencode/skills/example/SKILL.md')));
+  assert.match(read(local), /Local OpenCode preference/);
+  assert.match(read(local), /Shared instruction v1/);
+  f.configure();
+  assert.equal(read(local).match(/Shared instruction v1/g)?.length, 1);
+});
+
+test('one global instruction source links all agents without append blocks', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const file = path.join(f.repo, 'instructions/AGENTS.md'); write(file, 'One shared preference.\n');
+  const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
+  data.instructions = [{ path: 'instructions/AGENTS.md', agents: ['claude', 'codex', 'opencode'], mode: 'symlink' }];
+  write(path.join(f.repo, 'backbone.json'), JSON.stringify(data)); f.push();
+  const targets = ['.claude/CLAUDE.md', '.codex/AGENTS.md', '.config/opencode/AGENTS.md'].map(relative => path.join(f.home, relative));
+  for (const target of targets) write(target, 'Original local preference.\n');
+  f.configure();
+  for (const target of targets) { assert.equal(fs.realpathSync(target), fs.realpathSync(file)); assert.equal(read(target), 'One shared preference.\n'); }
+  write(file, 'Changed shared preference.\n');
+  for (const target of targets) assert.equal(read(target), 'Changed shared preference.\n');
+  f.configure();
+  for (const target of targets) assert.equal(fs.realpathSync(target), fs.realpathSync(file));
+  const native = z.object({ extras: z.array(z.object({ name: z.string(), targets: z.array(z.object({ mode: z.string() })) })) }).parse(parseYAML(read(path.join(f.home, '.config/agent-backbone/skillshare-control.yaml'))));
+  assert.equal(native.extras.filter(extra => extra.name.startsWith('agent-backbone-access-')).length, 0);
+  assert.ok(native.extras.find(extra => extra.name === 'agent-backbone-instructions-0')?.targets.every(target => target.mode === 'symlink'));
+});
+
+test('Argent policy reports local version drift without mutating its installation', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  f.cli('runtime', 'pin', 'argent', '0.28.0');
+  const fakeRoot = path.join(f.home, 'npm-global');
+  const npm = path.join(f.home, '.local/bin/npm'); write(npm, '#!/bin/sh\nprintf "%s\\n" ' + JSON.stringify(fakeRoot) + '\n'); fs.chmodSync(npm, 0o755);
+  write(path.join(fakeRoot, '@swmansion/argent/package.json'), JSON.stringify({ version: '0.29.0' }));
+  write(path.join(f.home, '.local/state/agent-backbone/runtimes.json'), JSON.stringify({ argent: { version: '0.28.0' } }));
+  assert.match(f.cliFail('runtime', 'sync').stderr, /Argent changed locally to 0.29.0/);
+  assert.match(f.cli('runtime', 'status').stdout, /approved: 0.28.0; installed: 0.29.0/);
+  const before = read(path.join(f.repo, 'runtimes.json'));
+  assert.notEqual(f.cliFail('runtime', 'pin', 'argent', 'latest').status, 0);
+  assert.equal(read(path.join(f.repo, 'runtimes.json')), before);
+});
+
+test('upstream updates retain frontmatter skill names and linked instruction mode', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const upstream = path.join(f.root, 'upstream'); fs.mkdirSync(upstream); f.git(upstream, 'init', '-b', 'main');
+  skill(path.join(upstream, 'skills/short-name'), 'vendor-long-name', 'Latest content'); f.commit(upstream);
+  const pkg = path.join(f.repo, 'packages/vendor'); skill(path.join(pkg, 'skills/short-name'), 'vendor-long-name', 'Old content');
+  fs.symlinkSync('../packages/vendor/skills/short-name', path.join(f.repo, 'skills/vendor-long-name'));
+  const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
+  data.packages.push({ name: 'vendor', path: 'packages/vendor', claude_plugin: false, local_files: [], skill_naming: 'frontmatter', upstream: { repository: upstream, path: '.', ref: 'main' } });
+  data.instructions[0]!.mode = 'symlink';
+  write(path.join(f.repo, 'backbone.json'), JSON.stringify(data)); f.push();
+  f.cli('upstream', 'update', '--all', '--repository', f.repo);
+  assert.match(read(path.join(f.repo, 'skills/vendor-long-name/SKILL.md')), /Latest content/);
+  assert.equal(fs.existsSync(path.join(f.repo, 'skills/short-name')), false);
+  assert.equal(manifestSchema.parse(json(path.join(f.repo, 'backbone.json'))).instructions[0]?.mode, 'symlink');
 });

@@ -1,19 +1,27 @@
 import { validate } from './validate.js';
 import { Command } from 'commander';
 import * as path from 'node:path';
-import { agentSchema, VERSION } from './model.js';
+import { agentSchema, defaultTargets, VERSION } from './model.js';
 import { config, manifest } from './delivery.js';
 import { configure, sync, status, inventory, launch, skills, setEnabled } from './operations.js';
 import { upstreamCheck, upstreamUpdate, adopt } from './upstream.js';
 import { locked } from './files.js';
+import { runtimeStatus, pinArgent, syncRuntimes } from './runtimes.js';
 
 const cli = new Command().enablePositionalOptions().name('agent-backbone').description('Sync skills and shared agent instructions from any Git repository.').version('agent-backbone ' + VERSION);
-cli.command('configure <repository>').option('--destination <path>').option('--agents <agents>', 'agent targets', 'claude,codex').option('--interval <seconds>', 'refresh interval', value => Number(value), 900).option('--no-background').action(async (repository: string, options: { destination?: string; agents: string; interval: number; background: boolean }) => {
+cli.command('configure <repository>').option('--destination <path>').option('--agents <agents>', 'agent targets', defaultTargets.join(',')).option('--interval <seconds>', 'refresh interval', value => Number(value), 900).option('--no-background').action(async (repository: string, options: { destination?: string; agents: string; interval: number; background: boolean }) => {
   if (!Number.isInteger(options.interval) || options.interval < 60) throw new Error('Refresh interval must be at least 60 seconds.');
   await configure({ repository, ...options, noBackground: !options.background });
 });
 cli.command('sync').option('--startup').action(async (options: { startup?: boolean }) => sync(!!options.startup));
 cli.command('status').action(status);
+const runtime = cli.command('runtime');
+runtime.command('status').action(async () => runtimeStatus(config().repo));
+runtime.command('sync').action(async () => locked(async () => syncRuntimes(config())));
+runtime.command('pin <name> <version>').option('--repository <path>').action((name: string, version: string, options: { repository?: string }) => {
+  if (name !== 'argent') throw new Error('Only Argent runtime ownership is supported.');
+  pinArgent(options.repository ? path.resolve(options.repository) : config().repo, version);
+});
 cli.command('inventory').action(inventory);
 cli.command('skills').description('Open Skillshare’s native manager; list state when piped.').option('--list', 'print skill states without opening the picker').option('--interactive', 'open the native manager').action(async (options: { list?: boolean; interactive?: boolean }) => {
   if (options.list && options.interactive) throw new Error('Choose --list or --interactive.');
