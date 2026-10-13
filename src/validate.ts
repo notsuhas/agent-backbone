@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { parse } from 'yaml';
 import { z } from 'zod';
 import { manifest, sourceSkills } from './delivery.js';
+import { contained, inside } from './files.js';
 
 export function validate(repo: string) {
   const data = manifest(repo), skills = sourceSkills(repo, data), names = new Set<string>();
@@ -11,8 +12,10 @@ export function validate(repo: string) {
     const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)?.[1];
     if (!header) throw new Error('Skill metadata missing: ' + id);
     const metadata = z.object({ name: z.string().min(1), description: z.string().min(1) }).parse(parse(header));
-    if (names.has(metadata.name)) throw new Error('Duplicate skill metadata name: ' + metadata.name);
-    names.add(metadata.name);
+    const prefix = data.packages.find(pkg => inside(contained(repo, pkg.path), dir))?.skill_prefix;
+    const name = prefix ? prefix + '-' + metadata.name : metadata.name;
+    if (names.has(name)) throw new Error('Duplicate skill metadata name: ' + name);
+    names.add(name);
   }
   process.stdout.write('Validated ' + skills.size + ' skills and ' + data.packages.length + ' packages.\n');
 }

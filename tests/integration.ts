@@ -570,3 +570,27 @@ test('upstream updates retain frontmatter skill names and linked instruction mod
   assert.equal(fs.existsSync(path.join(f.repo, 'skills/short-name')), false);
   assert.equal(manifestSchema.parse(json(path.join(f.repo, 'backbone.json'))).instructions[0]?.mode, 'symlink');
 });
+
+test('upstream updates preserve prefixed skills without replacing another package', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const upstream = path.join(f.root, 'upstream'); fs.mkdirSync(upstream); f.git(upstream, 'init', '-b', 'main');
+  skill(path.join(upstream, 'skills/tdd'), 'tdd', 'Latest vendor content');
+  skill(path.join(upstream, 'skills/new-skill'), 'new-skill', 'New vendor skill'); f.commit(upstream);
+  skill(path.join(f.repo, 'skills/tdd'), 'tdd', 'Existing independent skill');
+  const pkg = path.join(f.repo, 'packages/vendor'); skill(path.join(pkg, 'skills/tdd'), 'tdd', 'Old vendor content');
+  fs.symlinkSync('../packages/vendor/skills/tdd', path.join(f.repo, 'skills/matt-tdd'));
+  const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
+  data.packages.push({ name: 'vendor', path: 'packages/vendor', claude_plugin: false, local_files: [], skill_prefix: 'matt', upstream: { repository: upstream, path: '.', ref: 'main' } });
+  write(path.join(f.repo, 'backbone.json'), JSON.stringify(data)); f.push();
+  f.cli('upstream', 'update', '--all', '--repository', f.repo);
+  assert.match(read(path.join(f.repo, 'skills/matt-tdd/SKILL.md')), /Latest vendor content/);
+  assert.match(read(path.join(f.repo, 'skills/matt-new-skill/SKILL.md')), /New vendor skill/);
+  assert.match(read(path.join(f.repo, 'skills/tdd/SKILL.md')), /Existing independent skill/);
+  assert.equal(fs.existsSync(path.join(f.repo, 'skills/new-skill')), false);
+  assert.equal(manifestSchema.parse(json(path.join(f.repo, 'backbone.json'))).packages.find(pkg => pkg.name === 'vendor')?.skill_prefix, 'matt');
+  f.cli('validate', '--repository', f.repo);
+  f.cli('configure', f.repo, '--agents', 'codex', '--no-background');
+  assert.match(read(path.join(f.home, '.agents/skills/matt-tdd/SKILL.md')), /name: matt-tdd/);
+  assert.match(read(path.join(f.home, '.agents/skills/tdd/SKILL.md')), /name: tdd/);
+  assert.match(read(path.join(f.repo, 'packages/vendor/skills/tdd/SKILL.md')), /name: tdd/);
+});

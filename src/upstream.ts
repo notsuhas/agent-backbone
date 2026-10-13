@@ -72,6 +72,7 @@ async function updatePackage(repo: string, data: Manifest, pkg: Package) {
       const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
       candidate.name = z.object({ name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/) }).parse(frontmatter ? parse(frontmatter) : {}).name;
     }
+    if (pkg.skill_prefix) for (const candidate of candidates) candidate.name = pkg.skill_prefix + '-' + candidate.name;
     const names = new Set<string>();
     for (const candidate of candidates) {
       if (!/^[a-z0-9][a-z0-9-]*$/.test(candidate.name) || names.has(candidate.name) || ((exists(path.join(view, candidate.name)) || isLink(path.join(view, candidate.name))) && !owned.has(candidate.name))) throw new Error('New upstream skill conflicts with an existing source entry: ' + candidate.name);

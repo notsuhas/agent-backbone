@@ -75,8 +75,10 @@ Requires Node 22.16+ and a trusted Skillshare binary. Run `npm ci --ignore-scrip
 
 New configurations target Claude, Codex and OpenCode. Override this with `--agents`. Shared instructions append to each agent's global instruction file and preserve local text. MCP operations and synchronization use the same persistent control configuration to avoid competing ownership records.
 
-Skillshare v0.25.11 runs unchanged. Its Targets row describes native Skillshare delivery; Claude plugin delivery is verified separately. It is bundled in Agent Backbone v0.6.0.
+Skillshare v0.25.11 runs unchanged. Its Targets row describes native Skillshare delivery; Claude plugin delivery is verified separately. It is bundled in Agent Backbone v0.7.0.
 
 A library can use `instructions[].mode: "symlink"` for one canonical global instruction file. Its native filenames all link to the same source; append mode remains available for libraries that preserve local instruction overlays. Linked instructions do not receive separate host-policy blocks, so the shared source must contain any required host guidance.
 
 `runtimes.json` supports an approved Argent version. `agent-backbone runtime status` reports drift; `runtime sync` applies the approved version through Argent’s installer. `runtime pin argent VERSION` records a local version choice for review and publishing. Normal configure/refresh applies the policy too. Argent owns its CLI skills and lockfile; they are not imported into the shared skill source. A local CLI change is reported rather than silently reverted.
+
+Packages may set `skill_prefix`, for example `"skill_prefix": "matt"`. Upstream updates retain the prefix on shared links; active delivery also prefixes the frontmatter name without changing upstream source files.

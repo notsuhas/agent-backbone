@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const VERSION = '0.6.0';
+export const VERSION = '0.7.0';
 export const roots = { claude: '.claude/skills', codex: '.agents/skills', cursor: '.cursor/skills', gemini: '.gemini/skills', opencode: '.config/opencode/skills' };
 export const instructionFiles: Partial<Record<Agent, string>> = { claude: '.claude/CLAUDE.md', codex: '.codex/AGENTS.md', opencode: '.config/opencode/AGENTS.md' };
 export const agentSchema = z.enum(['claude', 'codex', 'cursor', 'gemini', 'opencode']);
@@ -9,7 +9,7 @@ export const defaultTargets: Agent[] = ['claude', 'codex', 'opencode'];
 const slug = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
 const skillID = z.string().refine(value => !value.includes('\\') && !value.includes('\0') && value.split('/').every(part => !!part && part !== '.' && part !== '..'));
 const upstreamSchema = z.object({ repository: z.string(), path: z.string().default('.'), ref: z.string().default('main'), approved_tree: z.string().optional(), approved_commit: z.string().optional() });
-const packageSchema = z.object({ name: slug, path: z.string(), claude_plugin: z.boolean().default(false), host_notes: z.string().optional(), local_files: z.array(z.string()).default([]), provenance_file: z.string().optional(), skill_naming: z.enum(['directory', 'frontmatter']).optional(), upstream: upstreamSchema.optional() });
+const packageSchema = z.object({ name: slug, path: z.string(), claude_plugin: z.boolean().default(false), host_notes: z.string().optional(), local_files: z.array(z.string()).default([]), provenance_file: z.string().optional(), skill_naming: z.enum(['directory', 'frontmatter']).optional(), skill_prefix: slug.optional(), upstream: upstreamSchema.optional() });
 export const manifestSchema = z.object({ schema_version: z.literal(1), skills_dir: z.string().default('skills'), packages: z.array(packageSchema).default([]), instructions: z.array(z.object({ path: z.string(), agents: z.array(agentSchema).default(defaultTargets), mode: z.enum(['append', 'symlink']).default('append') })).default([]) });
 export type Manifest = z.infer<typeof manifestSchema>;
 export type Package = z.infer<typeof packageSchema>;

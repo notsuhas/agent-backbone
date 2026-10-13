@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { parse, stringify } from 'yaml';
 import { configSchema, manifestSchema, roots, instructionFiles, type Agent, type Config, type Manifest } from './model.js';
 import { paths, readJSON, contained, real, inside, exists, isLink, walk, digest, validateLinks, saveJSON, atomicWrite, run } from './files.js';
 
@@ -75,6 +76,12 @@ function owned(target: string, previous?: Config) {
   return !!previous && inside(previous.repo, target);
 }
 const projectionSchema = z.record(z.string(), z.string());
+function prefixedMetadata(content: string, prefix: string) {
+  const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
+  if (!header) throw new Error('Prefixed skill metadata is missing.');
+  const metadata = z.object({ name: z.string().min(1) }).passthrough().parse(parse(header[1]!));
+  return '---\n' + stringify({ ...metadata, name: prefix + '-' + metadata.name }) + '---\n' + content.slice(header[0].length);
+}
 function projection(repo: string, data: Manifest, disabled: Set<string>) {
   const skills = sourceSkills(repo, data), activeSkills = new Map<string, string>(), packages = new Map<string, string>();
   const fingerprintsFile = path.join(paths().state, 'projections.json');
@@ -84,7 +91,7 @@ function projection(repo: string, data: Manifest, disabled: Set<string>) {
     const members = [...skills].filter(([, dir]) => inside(source, dir));
     const enabled = members.filter(([name]) => !disabled.has(name));
     if (members.length && !enabled.length) continue;
-    const key = createHash('sha256').update(digest(source)).update(JSON.stringify(members.map(([name]) => [name, disabled.has(name)]))).digest('hex');
+    const key = createHash('sha256').update(digest(source)).update(JSON.stringify(members.map(([name]) => [name, disabled.has(name)]))).update(pkg.skill_prefix || '').digest('hex');
     const target = path.join(paths().active, pkg.name, key);
     if (!exists(target)) {
       const pending = target + '.tmp-' + process.pid;
@@ -95,6 +102,7 @@ function projection(repo: string, data: Manifest, disabled: Set<string>) {
       for (const skillFile of walk(pending).filter(file => path.basename(file) === 'SKILL.md')) {
         const relative = path.relative(pending, path.dirname(skillFile));
         if (!enabledDirs.has(real(path.join(source, relative)))) fs.rmSync(path.dirname(skillFile), { recursive: true, force: true });
+        else if (pkg.skill_prefix) fs.writeFileSync(skillFile, prefixedMetadata(fs.readFileSync(skillFile, 'utf8'), pkg.skill_prefix));
       }
       validateLinks(pending);
       fs.renameSync(pending, target);
