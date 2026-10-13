@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const VERSION = '0.3.0';
+export const VERSION = '0.4.0';
 export const roots = { claude: '.claude/skills', codex: '.agents/skills', cursor: '.cursor/skills', gemini: '.gemini/skills', opencode: '.config/opencode/skills' };
 export const instructionFiles = { claude: '.claude/CLAUDE.md', codex: '.codex/AGENTS.md' };
 export const agentSchema = z.enum(['claude', 'codex', 'cursor', 'gemini', 'opencode']);
@@ -12,7 +12,7 @@ export const manifestSchema = z.object({ schema_version: z.literal(1), skills_di
 export type Manifest = z.infer<typeof manifestSchema>;
 export type Package = z.infer<typeof packageSchema>;
 export type Upstream = z.infer<typeof upstreamSchema>;
-export const configSchema = z.object({ repo: z.string(), agents: z.record(z.string(), z.string()).default({}), targets: z.array(agentSchema), engine: z.string(), command: z.string(), managed_links: z.record(z.string(), z.string()).default({}), disabled_skills: z.array(slug).default([]), interval: z.number().int().min(60).default(900), backup: z.string().default('') });
+export const configSchema = z.object({ repo: z.string(), agents: z.record(z.string(), z.string()).default({}), targets: z.array(agentSchema), engine: z.string(), command: z.string(), managed_links: z.record(z.string(), z.string()).default({}), managed_copies: z.record(z.string(), z.string()).default({}), disabled_skills: z.array(slug).default([]), interval: z.number().int().min(60).default(900), backup: z.string().default('') });
 export type Config = z.infer<typeof configSchema>;
 export const healthSchema = z.object({ status: z.enum(['current', 'stale']).optional(), reason: z.string().nullable().optional(), last_attempt: z.number().optional(), last_success: z.number().optional(), revision: z.string().optional() });
 const checkSchema = z.object({ checked_at: z.number(), latest_tree: z.string().optional(), approved_tree: z.string().optional(), status: z.enum(['current', 'review_available']).optional(), check_status: z.literal('unavailable').optional() });

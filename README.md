@@ -63,6 +63,29 @@ Selection is persistent per machine and applies to all configured agent targets.
 
 For CI, `agent-backbone upstream update --all --repository .` updates declared packages without configuring agents or needing Skillshare. `agent-backbone validate --repository .` checks package paths, links and skill metadata before an update PR is opened.
 
+## Native Skillshare controls
+
+```sh
+agent-backbone ui                 # native dashboard, foreground
+agent-backbone native-manager     # native terminal manager
+agent-backbone audit --global --no-tui
+agent-backbone analyze --global
+agent-backbone doctor
+agent-backbone mcp --help
+agent-backbone agents --json --global
+agent-backbone hooks --help
+agent-backbone extras --help
+agent-backbone plugin --help
+```
+
+Skillshare now owns ignore-pattern parsing and toggle storage. The checkbox picker remains as the Space/Enter interface; it uses that same state. Native dashboard edits update the canonical Git source, and a running adapter applies changes to both native skills and filtered Claude plugins. Rapid changes during a sync are retried. Run the dashboard through Backbone so this adapter stays active; `ui start` is deliberately unavailable. For a background terminal session, use `tmux new-session -d -s agent-backbone-ui 'agent-backbone ui --no-open'`.
+
+`~/.config/agent-backbone/skillshare-control.yaml` stores native preferences and resource definitions with mode 0600. Refresh preserves them instead of replacing them. A separate generated delivery config contains the active skill view. Per-agent filters and copy mode use Skillshare; copies edited locally are preserved and flagged before replacement. Existing foreign MCP servers and credential stores stay untouched.
+
+Shared custom agents live in the content repo's `agents/` directory; extras default to `extras/`. If the repo has `mcp.yaml` and no local inline MCP definitions, it becomes the shared MCP source. Use environment references for credentials; authentication remains on each machine. Native managers can edit these Git files, leaving changes for review and publication. Portable definitions must not contain secrets. Per-machine `.skillignore` and `.agentignore` files are excluded locally from Git.
+
+Backbone retains source refresh, global instruction blocks, package provenance and full-plugin filtering. It does not run skill scripts during audit or sync. Read-only commands and audits use Skillshare directly; static audit findings require interpretation and do not prove a skill safe. Full third-party plugin operations remain Skillshare's native workflow; package-specific host adapters still belong in `backbone.json`.
+
 ## Local state and recovery
 
 Config: `~/.config/agent-backbone/`. State/backups: `~/.local/state/agent-backbone/`. Default source checkout: `~/.local/share/agent-backbone/library/`; use `--destination` to change it. Git and agent credentials remain in their existing stores. Private repositories work with normal Git authentication.

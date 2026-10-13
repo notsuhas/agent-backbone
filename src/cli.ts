@@ -3,9 +3,9 @@ import { Command } from 'commander';
 import * as path from 'node:path';
 import { agentSchema, VERSION } from './model.js';
 import { config, manifest } from './delivery.js';
-import { configure, sync, status, inventory, launch, execute, skills, setEnabled } from './operations.js';
+import { configure, sync, status, inventory, launch, skills, setEnabled } from './operations.js';
 import { upstreamCheck, upstreamUpdate, adopt } from './upstream.js';
-import { enginePath, paths, locked } from './files.js';
+import { locked } from './files.js';
 
 const cli = new Command().enablePositionalOptions().name('agent-backbone').description('Sync skills and shared agent instructions from any Git repository.').version('agent-backbone ' + VERSION);
 cli.command('configure <repository>').option('--destination <path>').option('--agents <agents>', 'agent targets', 'claude,codex').option('--interval <seconds>', 'refresh interval', value => Number(value), 900).option('--no-background').action(async (repository: string, options: { destination?: string; agents: string; interval: number; background: boolean }) => {
@@ -34,6 +34,11 @@ upstream.command('update [name]').option('--all').option('--repository <path>').
   await locked(() => upstreamUpdate(repo, name, !!options.all));
 });
 cli.command('adopt <source>').requiredOption('--name <name>').action(async (source: string, options: { name: string }) => locked(async () => adopt(config().repo, source, options.name)));
-cli.command('skillshare [arguments...]').allowUnknownOption().allowExcessArguments().passThroughOptions().action((args: string[]) => { config(); process.env.SKILLSHARE_CONFIG = path.join(paths().directory, 'skillshare.yaml'); execute(enginePath(), args); });
+for (const name of ['ui', 'audit', 'doctor', 'analyze', 'mcp', 'hooks', 'extras', 'target', 'search', 'plugin']) {
+  cli.command(name + ' [arguments...]').description('Use Skillshare’s native ' + name + ' controls.').allowUnknownOption().allowExcessArguments().passThroughOptions().helpOption(false).action(async (args: string[]) => (await import('./native.js')).nativeCommand([name, ...args]));
+}
+cli.command('agents [arguments...]').description('Manage custom agents with Skillshare.').allowUnknownOption().allowExcessArguments().passThroughOptions().helpOption(false).action(async (args: string[]) => (await import('./native.js')).nativeCommand(['list', 'agents', ...args]));
+cli.command('native-manager').description('Open Skillshare’s richer terminal manager.').action(async () => (await import('./native.js')).nativeCommand(['list', '--global']));
+cli.command('skillshare [arguments...]').allowUnknownOption().allowExcessArguments().passThroughOptions().helpOption(false).action(async (args: string[]) => (await import('./native.js')).nativeCommand(args));
 try { await cli.parseAsync(); }
 catch (error) { process.stderr.write('agent-backbone: ' + (error instanceof Error ? error.message : String(error)) + '\n'); process.exitCode = 1; }

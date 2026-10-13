@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { createServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { parse as parseYAML } from 'yaml';
 import { configSchema, healthSchema, manifestSchema } from '../src/model.js';
 
 const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/agent-backbone');
@@ -231,7 +233,7 @@ test('PTY picker cancels pending changes and bulk toggles only filtered matches'
   const file = path.join(f.home, '.config/agent-backbone/config.json'), before = read(file);
   assert.match(await terminal(f, 'first \u0003'), /Cancelled; no changes saved/); assert.equal(read(file), before);
   assert.match(await terminal(f, 'packages/demo\u0004\r'), /Saved 2 skill changes/);
-  assert.deepEqual(configSchema.parse(json(file)).disabled_skills, ['first', 'second']);
+  assert.deepEqual(configSchema.parse(parseYAML(read(file))).disabled_skills, ['first', 'second']);
   assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/example/SKILL.md')));
 });
 test('forced picker rejects non-TTY input; explicit list works without writes', t => {
@@ -241,4 +243,150 @@ test('forced picker rejects non-TTY input; explicit list works without writes', 
   assert.match(f.cliFail('skills', '--interactive').stderr, /interactive terminal/);
   assert.match(f.cli('skills', '--list').stdout, /enabled  example/);
   assert.equal(read(file), before);
+});
+test('native Skillshare toggles share state with the picker and survive refresh', t => {
+  const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
+  f.cli('skillshare', 'disable', 'first', '--global');
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/second')));
+  assert.match(f.cli('skillshare', 'list', '--json', '--global').stdout, /"disabled": true/);
+  assert.equal(f.git(f.repo, 'status', '--porcelain'), '');
+  f.cli('sync'); f.configure();
+  assert.ok(!fs.existsSync(path.join(f.home, '.agents/skills/first')));
+  f.cli('enable', 'first');
+  assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+  assert.ok(!f.cli('skillshare', 'list', '--json', '--global').stdout.includes('"disabled": true'));
+});
+test('native MCP definitions persist across refresh and preserve foreign servers and credentials', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  write(path.join(f.home, '.claude.json'), JSON.stringify({ mcpServers: { foreign: { type: 'http', url: 'https://foreign.invalid/mcp' } } }));
+  write(path.join(f.home, '.codex/config.toml'), '[mcp_servers.foreign]\nurl = "https://foreign.invalid/mcp"\n');
+  const auth = path.join(f.home, '.codex/auth.json'); write(auth, '{"fixture":"credential remains local"}');
+  f.cli('mcp', 'add', 'shared', '--url', 'https://docs.invalid/mcp', '--target', 'claude', '--target', 'codex', '--no-tui');
+  f.cli('sync'); f.configure();
+  const claude = z.object({ mcpServers: z.record(z.string(), z.unknown()) }).parse(json(path.join(f.home, '.claude.json')));
+  assert.ok(claude.mcpServers.shared); assert.ok(claude.mcpServers.foreign);
+  assert.match(read(path.join(f.home, '.codex/config.toml')), /mcp_servers.shared/);
+  assert.match(read(path.join(f.home, '.codex/config.toml')), /mcp_servers.foreign/);
+  assert.equal(read(auth), '{"fixture":"credential remains local"}');
+  assert.ok(fs.statSync(path.join(f.home, '.config/agent-backbone/skillshare-control.yaml')).mode & 0o600);
+});
+test('native target settings persist and turning off Claude removes its full plugin', t => {
+  const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
+  const file = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');
+  const document = z.record(z.string(), z.unknown()).parse(parseYAML(read(file)));
+  const targets = z.record(z.string(), z.unknown()).parse(document.targets);
+  const claude = z.record(z.string(), z.unknown()).parse(targets.claude);
+  claude.skills = { enabled: false }; targets.claude = claude; document.targets = targets;
+  document.tui = false; write(file, JSON.stringify(document)); f.cli('sync');
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/demo')));
+  assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/first/SKILL.md')));
+  f.configure(); assert.equal(z.record(z.string(), z.unknown()).parse(parseYAML(read(file))).tui, false);
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/demo')));
+});
+test('Git MCP definitions refresh into native configs without copying local credentials', t => {
+  const f = fixture(); t.after(f.cleanup);
+  write(path.join(f.repo, 'mcp.yaml'), 'servers: {}\n'); f.push(); f.configure();
+  const writer = f.writer();
+  write(path.join(writer, 'mcp.yaml'), 'servers:\n  shared:\n    url: https://docs.invalid/mcp\n    targets: [claude, codex]\n');
+  f.push(writer); f.cli('sync');
+  const native = z.object({ mcpServers: z.record(z.string(), z.unknown()) }).parse(json(path.join(f.home, '.claude.json')));
+  assert.ok(native.mcpServers.shared);
+  assert.match(read(path.join(f.home, '.codex/config.toml')), /mcp_servers.shared/);
+  assert.equal(f.git(f.repo, 'status', '--porcelain'), '');
+});
+test('custom agents use native Skillshare sync with per-target paths', t => {
+  const f = fixture(); t.after(f.cleanup);
+  write(path.join(f.repo, 'agents/worker.md'), '---\nname: worker\ndescription: fixture agent\n---\nDo the assigned task.\n'); f.push(); f.configure();
+  const file = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');
+  const doc = z.record(z.string(), z.unknown()).parse(parseYAML(read(file))), targets = z.record(z.string(), z.unknown()).parse(doc.targets);
+  targets.claude = { ...z.record(z.string(), z.unknown()).parse(targets.claude), agents: { path: path.join(f.home, '.claude/agents'), mode: 'merge' } };
+  doc.targets = targets; write(file, JSON.stringify(doc)); f.cli('sync');
+  assert.match(read(path.join(f.home, '.claude/agents/worker.md')), /assigned task/);
+  assert.match(f.cli('agents', '--json', '--global').stdout, /worker/);
+});
+test('native copy mode persists, detects local edits and removes disabled copies', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  const file = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');
+  const doc = z.record(z.string(), z.unknown()).parse(parseYAML(read(file))), targets = z.record(z.string(), z.unknown()).parse(doc.targets);
+  targets.codex = { skills: { path: path.join(f.home, '.agents/skills'), mode: 'copy' } }; doc.targets = targets; write(file, JSON.stringify(doc));
+  f.cli('sync'); assert.ok(!fs.lstatSync(path.join(f.home, '.agents/skills/example')).isSymbolicLink());
+  f.cli('sync'); f.cli('disable', 'example'); assert.ok(!fs.existsSync(path.join(f.home, '.agents/skills/example')));
+  f.cli('enable', 'example');
+  const asset = path.join(f.home, '.agents/skills/example/support.txt'); write(asset, 'Unpublished target edit');
+  assert.match(f.cliFail('sync').stderr, /Unmanaged destination|edited/); assert.equal(read(asset), 'Unpublished target edit');
+});
+test('native ignore overrides do not let the checkbox picker falsely claim a toggle', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  write(path.join(f.repo, 'skills/.skillignore.local'), '!example\n');
+  assert.match(f.cliFail('disable', 'example').stderr, /ignore rule overrides/);
+  assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/example/SKILL.md')));
+  assert.equal(read(path.join(f.repo, 'skills/.skillignore')), '');
+  assert.equal(f.git(f.repo, 'status', '--porcelain'), '');
+});
+
+test('native dashboard edits canonical files and applies disable/enable to full plugins', async t => {
+  const f = fixture(); t.after(f.cleanup); const pkg = f.plugin(); f.configure();
+  const reservation = createServer(); await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const address = reservation.address(); assert.ok(address && typeof address !== 'string'); const port = address.port;
+  await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+  const child = spawn(cliPath, ['ui', '--no-open', '--host', '127.0.0.1', '--port', String(port)], { env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let diagnostics = ''; child.stdout.on('data', (data: Buffer) => { diagnostics += data.toString(); }); child.stderr.on('data', (data: Buffer) => { diagnostics += data.toString(); });
+  const base = 'http://127.0.0.1:' + port;
+  async function waitFor(check: () => Promise<boolean> | boolean) {
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) { if (await check()) return; if (child.exitCode !== null) throw new Error(diagnostics); await new Promise(resolve => setTimeout(resolve, 100)); }
+    throw new Error('Dashboard timed out: ' + diagnostics);
+  }
+  async function request(endpoint: string, method = 'GET', body?: string) {
+    const response = await fetch(base + endpoint, { method, headers: { Origin: base, 'Content-Type': 'application/json' }, ...(body ? { body } : {}), signal: AbortSignal.timeout(3000) });
+    assert.ok(response.ok, await response.text());
+  }
+  try {
+    await waitFor(async () => { try { return (await fetch(base + '/api/resources', { signal: AbortSignal.timeout(1000) })).ok; } catch { return false; } });
+    await request('/api/resources/first/disable', 'POST', '{}');
+    await waitFor(() => !fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+    assert.ok(!fs.existsSync(path.join(f.home, '.agents/skills/first')));
+    assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/second')));
+    await request('/api/resources/first/enable', 'POST', '{}');
+    await waitFor(() => fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+    const updatedBody = read(path.join(pkg, 'skills/first/SKILL.md')).replace('Version one', 'Edited from native dashboard');
+    await request('/api/resources/first/content', 'PUT', JSON.stringify({ content: updatedBody }));
+    assert.match(read(path.join(pkg, 'skills/first/SKILL.md')), /Edited from native dashboard/);
+    write(path.join(pkg, 'skills/first/support.txt'), 'Edited canonical asset');
+    await waitFor(() => read(path.join(f.home, '.agents/skills/first/support.txt')) === 'Edited canonical asset');
+    assert.match(f.git(f.repo, 'status', '--porcelain'), /support.txt/);
+    assert.ok(!/Generated skill view was edited/.test(diagnostics));
+  } finally {
+    child.kill('SIGINT');
+    await new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else { const timeout = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 5000); child.once('close', () => { clearTimeout(timeout); resolve(); }); } });
+  }
+});
+test('per-agent native filters also remove skills from full Claude plugins', t => {
+  const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
+  const file = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');
+  const doc = z.record(z.string(), z.unknown()).parse(parseYAML(read(file))), targets = z.record(z.string(), z.unknown()).parse(doc.targets);
+  targets.claude = { skills: { path: path.join(f.home, '.claude/skills'), exclude: ['first'] } }; doc.targets = targets;
+  write(file, JSON.stringify(doc)); f.cli('sync');
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+  assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/second/SKILL.md')));
+  assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/first/SKILL.md')));
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/first')));
+  assert.match(read(path.join(f.home, '.claude/CLAUDE.md')), /Disabled skills: first/);
+});
+test('native hooks and extras persist without executing hooks or losing startup refresh', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  const marker = path.join(f.home, 'hook-executed'), entry = path.join(f.root, 'hook.json');
+  write(entry, JSON.stringify({ bindings: { claude: { events: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'touch "' + marker + '"' }] }] } } } }));
+  f.cli('hooks', 'add', 'fixture', '--file', entry, '--global');
+  const rule = path.join(f.repo, 'extras/rules/rule.md'); write(rule, 'Shared fixture rule\n'); f.push();
+  const file = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');
+  const doc = z.record(z.string(), z.unknown()).parse(parseYAML(read(file)));
+  doc.extras = [{ name: 'rules', source: path.join(f.repo, 'extras/rules'), targets: [{ path: path.join(f.home, '.claude/rules'), mode: 'merge' }] }];
+  write(file, JSON.stringify(doc)); f.cli('sync'); f.configure();
+  assert.equal(read(path.join(f.home, '.claude/rules/rule.md')), 'Shared fixture rule\n');
+  assert.match(read(path.join(f.home, '.claude/settings.json')), /hook-executed/);
+  assert.match(read(path.join(f.home, '.claude/settings.json')), /agent-backbone-refresh/);
+  assert.ok(!fs.existsSync(marker));
+  assert.match(f.cli('hooks', 'list', '--json', '--global').stdout, /fixture/);
 });

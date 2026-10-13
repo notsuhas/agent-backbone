@@ -1,12 +1,16 @@
+import { prepareEngine, engineSelection, engineToggle } from './engine.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import { VERSION, roots, agentSchema, configSchema, healthSchema, checksSchema, installerSchema, type Agent, type Config } from './model.js';
 import { config, previousConfig, manifest, sourceSkills, apply } from './delivery.js';
-import { paths, exists, real, isLink, readJSON, saveJSON, run, commandPath, enginePath, quote, repositoryURL, atomicWrite, which, backupDir, locked, walk } from './files.js';
+import { digest, paths, exists, real, isLink, readJSON, saveJSON, run, commandPath, enginePath, quote, repositoryURL, atomicWrite, which, backupDir, locked, walk } from './files.js';
 import { upstreamCheck } from './upstream.js';
 import { createHash } from 'node:crypto';
 
+function copiedTargets(links: Record<string, string>) {
+  return Object.fromEntries(Object.keys(links).filter(target => exists(target) && !isLink(target) && fs.statSync(target).isDirectory()).map(target => [target, digest(target)]));
+}
 interface IConfigure { repository: string; destination?: string; agents: string; interval: number; noBackground: boolean }
 async function installIntegration(current: Config, noBackground: boolean) {
   const { home, state } = paths(), bin = path.join(home, '.local/bin');
@@ -56,7 +60,10 @@ export async function configure(options: IConfigure) {
     }
     const data = manifest(repo), agents = z.array(agentSchema).nonempty().parse(options.agents.split(','));
     await run(['git', 'config', 'pull.ff', 'only'], repo);
-    const backup = backupDir('backup'), engine = enginePath(), disabled = previous?.disabled_skills || [];
+    const backup = backupDir('backup'), engine = enginePath();
+    const seed = configSchema.parse({ ...previous, repo, targets: agents, engine, command: commandPath() });
+    await prepareEngine(seed, data);
+    const disabled = await engineSelection(seed, data);
     const managed = await apply({ repo, data, agents, ...(previous ? { previous } : {}), backup, engine, disabled });
     const originals = { ...previous?.agents }, bin = path.join(home, '.local/bin');
     fs.mkdirSync(bin, { recursive: true });
@@ -67,6 +74,7 @@ export async function configure(options: IConfigure) {
       else if (found) originals[agent] = found;
     }
     const current = configSchema.parse({ repo, agents: originals, targets: agents, engine, command: commandPath(), managed_links: managed, disabled_skills: disabled, interval: options.interval, backup });
+    current.managed_copies = copiedTargets(current.managed_links);
     saveJSON(path.join(directory, 'config.json'), current);
     await installIntegration(current, options.noBackground);
     process.stdout.write('Configured ' + repo + ' for ' + agents.join(', ') + '. Backups: ' + backup + '\n');
@@ -82,8 +90,10 @@ export async function sync(startup = false) {
       await run(['git', 'pull', '--ff-only'], current.repo, 15000);
       const data = manifest(current.repo);
       current.engine = enginePath();
+      current.disabled_skills = await engineSelection(current, data);
       current.managed_links = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('sync-backup'), engine: current.engine, disabled: current.disabled_skills });
-      saveJSON(path.join(directory, 'config.json'), current);
+      current.managed_copies = copiedTargets(current.managed_links);
+    saveJSON(path.join(directory, 'config.json'), current);
       health.status = 'current'; health.reason = null; health.last_success = Date.now() / 1000;
       await upstreamCheck(current.repo, data, false, true);
     } catch (error) {
@@ -96,16 +106,24 @@ export async function sync(startup = false) {
     saveJSON(path.join(state, 'status.json'), health);
   }, startup);
 }
+export async function reconcileEngine() {
+  await locked(async () => {
+    const current = config(), data = manifest(current.repo);
+    current.disabled_skills = await engineSelection(current, data);
+    current.managed_links = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('native-backup'), engine: enginePath(), disabled: current.disabled_skills });
+    current.managed_copies = copiedTargets(current.managed_links);
+    saveJSON(path.join(paths().directory, 'config.json'), current);
+  });
+}
 export async function setSkillSelection(changes: ReadonlyMap<string, boolean>) {
   if (!changes.size) return;
   await locked(async () => {
     const current = config(), data = manifest(current.repo), skills = sourceSkills(current.repo, data);
     for (const name of changes.keys()) if (!skills.has(name) && !current.disabled_skills.includes(name)) throw new Error('Unknown shared skill: ' + name + '. Use agent-backbone skills.');
-    const disabled = new Set(current.disabled_skills);
-    for (const [name, enabled] of changes) { if (enabled) disabled.delete(name); else disabled.add(name); }
-    const selection = [...disabled].sort();
+    const selection = await engineToggle(current, data, changes);
     const managed = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('toggle-backup'), engine: enginePath(), disabled: selection });
     current.disabled_skills = selection; current.managed_links = managed;
+    current.managed_copies = copiedTargets(current.managed_links);
     saveJSON(path.join(paths().directory, 'config.json'), current);
   });
 }
