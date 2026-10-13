@@ -29,7 +29,7 @@ if args.skillshare_binary:
     candidate=args.skillshare_binary.resolve()
     if candidate != binary:
         preserve(binary,'skillshare');shutil.copy2(candidate,binary);binary.chmod(0o755)
-elif not binary.exists():
+elif not binary.exists() or subprocess.run([str(binary),'version'],capture_output=True,text=True).stdout.strip() != 'skillshare v'+VERSION:
     system={'Darwin':'darwin','Linux':'linux'}.get(platform.system())
     arch={'arm64':'arm64','aarch64':'arm64','x86_64':'amd64'}.get(platform.machine())
     if not system or not arch:raise SystemExit('Bootstrap currently supports macOS/Linux arm64 or amd64.')
@@ -43,6 +43,7 @@ elif not binary.exists():
         if hashlib.sha256((temp/filename).read_bytes()).hexdigest()!=expected:raise SystemExit('Release checksum mismatch.')
         with tarfile.open(temp/filename) as archive:
             member=next(m for m in archive.getmembers() if Path(m.name).name=='skillshare' and m.isfile())
+            preserve(binary,'previous-skillshare')
             binary.write_bytes(archive.extractfile(member).read());binary.chmod(0o755)
 
 skill_config=config_dir/'skillshare.yaml'
