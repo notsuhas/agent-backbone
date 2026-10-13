@@ -1,3 +1,4 @@
+import { dashboardProxy } from './dashboard.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -34,7 +35,9 @@ export async function nativeCommand(args: string[]) {
     await reconcileEngine();
     prior = next;
   }
-  const child = spawn(enginePath(), args, { stdio: 'inherit', env: { ...process.env, SKILLSHARE_CONFIG: controlPath() } });
+  const dashboard = command === 'ui' && !args.some(arg => ['--help', '-h', '--clear-cache', 'stop'].includes(arg)) ? await dashboardProxy(args.slice(1)) : undefined;
+  const child = spawn(enginePath(), dashboard ? ['ui', ...dashboard.args] : args, { stdio: dashboard ? ['inherit', 'pipe', 'inherit'] : 'inherit', env: { ...process.env, SKILLSHARE_CONFIG: controlPath() } });
+  if (dashboard) { process.stdout.write('Skillshare dashboard: ' + dashboard.frontURL + '\n'); child.stdout?.on('data', (chunk: Buffer) => process.stdout.write(chunk.toString().replaceAll(dashboard.backendURL, dashboard.frontURL))); }
   const forward = (signal: NodeJS.Signals) => child.kill(signal);
   const interrupt = () => forward('SIGINT'), terminate = () => forward('SIGTERM');
   process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
@@ -49,6 +52,7 @@ export async function nativeCommand(args: string[]) {
     await reconcile();
     if (code) process.exitCode = code;
   } finally {
+    dashboard?.close();
     if (timer) clearInterval(timer);
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');

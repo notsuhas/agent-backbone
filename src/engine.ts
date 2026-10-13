@@ -25,6 +25,9 @@ export async function prepareEngine(current: Config, data: Manifest) {
     const pluginIDs = [...fs.readdirSync(source)].filter(name => data.packages.some(pkg => pkg.claude_plugin && fs.realpathSync(path.join(source, name)).startsWith(fs.realpathSync(contained(current.repo, pkg.path)) + path.sep)));
     const claude = nativeSchema.parse(targets.claude || {});
     if (Array.isArray(claude.exclude)) claude.exclude = claude.exclude.filter(name => typeof name !== 'string' || !pluginIDs.includes(name));
+    const skills = nativeSchema.parse(claude.skills || {});
+    if (Array.isArray(skills.exclude)) skills.exclude = skills.exclude.filter(name => typeof name !== 'string' || !pluginIDs.includes(name));
+    if (claude.skills) claude.skills = skills;
     targets.claude = claude;
   }
   for (const agent of current.targets) {

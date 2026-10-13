@@ -344,6 +344,10 @@ test('native dashboard edits canonical files and applies disable/enable to full 
   }
   try {
     await waitFor(async () => { try { return (await fetch(base + '/api/resources', { signal: AbortSignal.timeout(1000) })).ok; } catch { return false; } });
+    const diff = z.object({ diffs: z.array(z.object({ items: z.array(z.unknown()) })) }).parse(await (await fetch(base + '/api/diff')).json());
+    assert.ok(diff.diffs.every(target => target.items.length === 0), 'Dashboard reported generated delivery links as stale.');
+    const forbidden = await fetch(base + '/api/resources/first/disable', { method: 'POST', headers: { Origin: 'https://untrusted.invalid', 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(forbidden.status, 403);
     await request('/api/resources/first/disable', 'POST', '{}');
     await waitFor(() => !fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
     assert.ok(!fs.existsSync(path.join(f.home, '.agents/skills/first')));
@@ -389,4 +393,19 @@ test('native hooks and extras persist without executing hooks or losing startup 
   assert.match(read(path.join(f.home, '.claude/settings.json')), /agent-backbone-refresh/);
   assert.ok(!fs.existsSync(marker));
   assert.match(f.cli('hooks', 'list', '--json', '--global').stdout, /fixture/);
+});
+
+test('migration removes generated plugin exclusions in modern Skillshare target syntax', t => {
+  const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
+  const control = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');
+  fs.unlinkSync(control);
+  const delivery = path.join(f.home, '.config/agent-backbone/skillshare.yaml');
+  const document = z.record(z.string(), z.unknown()).parse(parseYAML(read(delivery)));
+  const targets = z.record(z.string(), z.unknown()).parse(document.targets);
+  const claude = z.record(z.string(), z.unknown()).parse(targets.claude);
+  const settings = z.record(z.string(), z.unknown()).parse(claude.skills);
+  settings.exclude = ['first', 'second']; claude.skills = settings; targets.claude = claude; document.targets = targets;
+  write(delivery, JSON.stringify(document)); f.cli('sync');
+  assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/first/SKILL.md')));
+  assert.ok(fs.existsSync(path.join(f.home, '.claude/skills/demo/skills/second/SKILL.md')));
 });
