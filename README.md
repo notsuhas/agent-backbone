@@ -48,7 +48,7 @@ Shared instruction files are native single-file extras in append mode. Their das
 
 ## Updates and safety
 
-Refresh runs before supported agent launch, on Claude startup/resume, and every 15 minutes on macOS. Linux uses launchers/hooks unless you add a timer. Dirty sources, divergence and network failures retain cached delivery and report the problem. Native dashboard edits apply locally, but must be reviewed, committed and pushed to reach other machines. Native ignore patterns, resource settings and copy mode survive refresh. Locally edited managed copies and generated package views are detected.
+Refresh runs before supported agent launch, on Claude startup/resume, and every 15 minutes on macOS. Standalone version/help probes bypass refresh so provider detection does not wait for Git or upstream checks. Linux uses launchers/hooks unless you add a timer. Dirty sources, divergence and network failures retain cached delivery and report the problem. Native dashboard edits apply locally, but must be reviewed, committed and pushed to reach other machines. Native ignore patterns, resource settings and copy mode survive refresh. Locally edited managed copies and generated package views are detected.
 
 ```sh
 agent-backbone status

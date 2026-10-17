@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const VERSION = '0.7.0';
+export const VERSION = '0.7.1';
 export const roots = { claude: '.claude/skills', codex: '.agents/skills', cursor: '.cursor/skills', gemini: '.gemini/skills', opencode: '.config/opencode/skills' };
 export const instructionFiles: Partial<Record<Agent, string>> = { claude: '.claude/CLAUDE.md', codex: '.codex/AGENTS.md', opencode: '.config/opencode/AGENTS.md' };
 export const agentSchema = z.enum(['claude', 'codex', 'cursor', 'gemini', 'opencode']);

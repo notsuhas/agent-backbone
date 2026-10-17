@@ -53,6 +53,25 @@ function fixture() {
   return { root, home, repo, remote, env, git, commit, exec, cli, cliFail, configure, writer, push, plugin, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
+test('agent information probes skip refresh while sessions receive upstream updates', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const opencode = path.join(f.home, '.local/bin/opencode');
+  write(opencode, '#!/bin/sh\nprintf "original opencode %s\\n" "$*"\n'); fs.chmodSync(opencode, 0o755);
+  f.configure();
+  const writer = f.writer();
+  skill(path.join(writer, 'skills/example'), 'example', 'Updated before session'); f.push(writer);
+  for (const agent of ['claude', 'codex', 'opencode']) {
+    for (const flag of ['--version', '-v', '-V', '--help', '-h']) {
+      const result = f.exec(path.join(f.home, '.local/bin', agent), [flag]);
+      assert.equal(result.stdout, 'original ' + agent + ' ' + flag + '\n');
+      assert.equal(result.stderr, '');
+      assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Version one/);
+    }
+  }
+  assert.equal(f.exec(opencode, ['run', 'hello']).stdout, 'original opencode run hello\n');
+  assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Updated before session/);
+});
+
 test('preserves shared instruction symlinks, assets, repeated configuration and agent protocol', t => {
   const f = fixture(); t.after(f.cleanup);
   const global = path.join(f.home, 'dotfiles/GLOBAL.md'); write(global, 'Local preferences survive.\n');

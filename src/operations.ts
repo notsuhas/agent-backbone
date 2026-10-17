@@ -174,8 +174,10 @@ export function inventory() {
 export async function launch(agent: Agent, args: string[]) {
   const executable = config().agents[agent];
   if (!executable) throw new Error('Agent executable was not registered during configuration.');
-  await sync(true);
-  execute(executable, args[0] === '--' ? args.slice(1) : args);
+  const forwarded = args[0] === '--' ? args.slice(1) : args;
+  const informationOnly = forwarded.length === 1 && ['--version', '-v', '-V', '--help', '-h'].includes(forwarded[0] || '');
+  if (!informationOnly) await sync(true);
+  execute(executable, forwarded);
 }
 export function execute(executable: string, args: string[]): never {
   const env: Record<string, string> = {};
