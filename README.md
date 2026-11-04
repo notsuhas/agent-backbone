@@ -82,3 +82,11 @@ A library can use `instructions[].mode: "symlink"` for one canonical global inst
 `runtimes.json` supports an approved Argent version. `agent-backbone runtime status` reports drift; `runtime sync` applies the approved version through Argent’s installer. `runtime pin argent VERSION` records a local version choice for review and publishing. Normal configure/refresh applies the policy too. Argent owns its CLI skills and lockfile; they are not imported into the shared skill source. A local CLI change is reported rather than silently reverted.
 
 Packages may set `skill_prefix`, for example `"skill_prefix": "matt"`. Upstream updates retain the prefix on shared links; active delivery also prefixes the frontmatter name without changing upstream source files.
+
+### Iterating on tests
+
+`npm test` remains the full build-and-test gate. After `npm run build`, use
+`npm run test:built` to rerun the compiled suite without rebuilding unchanged
+source. For one case, use `node --test --test-name-pattern="case name"
+dist/tests/integration.js`. Rebuild after source edits; run `npm test` before
+delivery. Keep the existing `AGENT_BACKBONE_SKILLSHARE` environment setting.

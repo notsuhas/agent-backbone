@@ -9,8 +9,9 @@
   "scripts": {
     "build": "tsc && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/tests/*.js",
-    "prepack": "npm run build"
+    "test": "npm run build && npm run test:built",
+    "prepack": "npm run build",
+    "test:built": "node --test dist/tests/*.js"
   },
   "dependencies": {
     "commander": "^14.0.1",
