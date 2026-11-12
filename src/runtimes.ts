@@ -18,14 +18,17 @@ async function installedArgent() {
   return exists(file) ? installedSchema.parse(readJSON(file)).version : undefined;
 }
 
-async function argentSkillsMatch() {
+async function argentSkillsMatch(targets: Config['targets']) {
   const root = await run(['npm', 'root', '-g']);
   const bundled = path.join(root, '@swmansion/argent/skills');
   if (!exists(bundled)) return false;
   const names = fs.readdirSync(bundled).filter(name => exists(path.join(bundled, name, 'SKILL.md')));
   return names.length > 0 && names.every(name => {
-    const actual = path.join(paths().home, '.agents/skills', name, 'SKILL.md');
-    return exists(actual) && digest(path.dirname(actual)) === digest(path.join(bundled, name));
+    const directories = ['.agents/skills', ...(targets.includes('claude') ? ['.claude/skills'] : [])];
+    return directories.every(directory => {
+      const actual = path.join(paths().home, directory, name, 'SKILL.md');
+      return exists(actual) && digest(path.dirname(actual)) === digest(path.join(bundled, name));
+    });
   });
 }
 
@@ -63,17 +66,15 @@ export async function syncRuntimes(current: Config) {
   const skills = z.object({ skills: z.record(z.string(), z.unknown()).default({}) }).parse(readJSON(lock));
   const tracked = Object.keys(skills.skills).some(name => name.startsWith('argent-'));
   if (installed) await preserveArgentPermissions();
-  if (installed === desired.version && tracked && previous.argent?.version === desired.version && await argentSkillsMatch()) return;
+  if (installed === desired.version && tracked && previous.argent?.version === desired.version && await argentSkillsMatch(current.targets)) return;
   const env = { DO_NOT_TRACK: '1', DISABLE_TELEMETRY: '1' };
   const cwd = path.join(paths().state, 'runtime-workspace');
   fs.mkdirSync(cwd, { recursive: true });
   await run(['npx', '--yes', '@swmansion/argent@' + desired.version, 'update', '--global', '--version', desired.version, '--yes', '--no-telemetry'], cwd, 240000, env);
-  if (!tracked) {
-    await run(['npx', '--yes', 'skills', 'add', 'software-mansion/argent/packages/skills/skills#v' + desired.version, '--skill', '*', '--agent', 'claude-code', 'codex', 'opencode', '--global', '--yes'], cwd, 120000, env);
-  }
+  await run(['npx', '--yes', 'skills', 'add', 'software-mansion/argent/packages/skills/skills#v' + desired.version, '--skill', '*', '--agent', 'claude-code', 'codex', 'opencode', '--global', '--yes'], cwd, 120000, env);
   if (await installedArgent() !== desired.version) throw new Error('Argent installer did not apply the approved version.');
   await preserveArgentPermissions();
-  if (!await argentSkillsMatch()) throw new Error('Argent skills did not match the installed CLI.');
+  if (!await argentSkillsMatch(current.targets)) throw new Error('Argent skills did not match the installed CLI.');
   const updated = z.object({ skills: z.record(z.string(), z.unknown()).default({}) }).parse(readJSON(lock));
   if (!Object.keys(updated.skills).some(name => name.startsWith('argent-'))) throw new Error('Argent skills were not registered by its installer.');
   saveJSON(stateFile, { argent: desired });

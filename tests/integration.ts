@@ -574,6 +574,32 @@ test('Argent policy reports local version drift without mutating its installatio
   assert.equal(read(path.join(f.repo, 'runtimes.json')), before);
 });
 
+test('Argent refresh repairs renamed skills missing from Claude and then stays idempotent', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  f.cli('runtime', 'pin', 'argent', '0.32.0');
+  const fakeRoot = path.join(f.home, 'npm-global');
+  const npm = path.join(f.home, '.local/bin/npm'); write(npm, '#!/bin/sh\nprintf "%s\\n" ' + JSON.stringify(fakeRoot) + '\n'); fs.chmodSync(npm, 0o755);
+  write(path.join(fakeRoot, '@swmansion/argent/package.json'), JSON.stringify({ version: '0.32.0' }));
+  skill(path.join(fakeRoot, '@swmansion/argent/skills/argent-qa-e2e'), 'argent-qa-e2e');
+  skill(path.join(f.home, '.agents/skills/argent-qa-e2e'), 'argent-qa-e2e');
+  write(path.join(f.home, '.argent/config.json'), JSON.stringify({ allowlist: { enabled: false } }));
+  write(path.join(f.home, '.agents/.skill-lock.json'), JSON.stringify({ skills: { 'argent-qa-e2e': {} } }));
+  write(path.join(f.home, '.local/state/agent-backbone/runtimes.json'), JSON.stringify({ argent: { version: '0.32.0' } }));
+  const installer = path.join(f.home, 'installer.mjs');
+  write(installer, `import fs from 'node:fs'; import path from 'node:path';
+const home = process.env.HOME, args = process.argv.slice(2);
+fs.appendFileSync(path.join(home, 'installer-calls.jsonl'), JSON.stringify(args) + '\\n');
+if (args.includes('skills')) { fs.mkdirSync(path.join(home, '.claude/skills'), { recursive: true }); fs.symlinkSync('../../.agents/skills/argent-qa-e2e', path.join(home, '.claude/skills/argent-qa-e2e')); }
+`);
+  const npx = path.join(f.home, '.local/bin/npx'); write(npx, '#!/bin/sh\nexec ' + JSON.stringify(process.execPath) + ' ' + JSON.stringify(installer) + ' "$@"\n'); fs.chmodSync(npx, 0o755);
+  f.cli('runtime', 'sync');
+  assert.match(read(path.join(f.home, '.claude/skills/argent-qa-e2e/SKILL.md')), /name: argent-qa-e2e/);
+  const calls = read(path.join(f.home, 'installer-calls.jsonl'));
+  assert.match(calls, /"--agent","claude-code","codex","opencode"/);
+  f.cli('runtime', 'sync');
+  assert.equal(read(path.join(f.home, 'installer-calls.jsonl')), calls);
+});
+
 test('upstream updates retain frontmatter skill names and linked instruction mode', t => {
   const f = fixture(); t.after(f.cleanup);
   const upstream = path.join(f.root, 'upstream'); fs.mkdirSync(upstream); f.git(upstream, 'init', '-b', 'main');
