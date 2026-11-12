@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { parse } from 'yaml';
+import { parseSkillFrontmatter } from './frontmatter.js';
 import { z } from 'zod';
 import { manifest, sourceSkills } from './delivery.js';
 import { contained, inside } from './files.js';
@@ -11,7 +11,7 @@ export function validate(repo: string) {
     const content = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
     const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)?.[1];
     if (!header) throw new Error('Skill metadata missing: ' + id);
-    const metadata = z.object({ name: z.string().min(1), description: z.string().min(1) }).parse(parse(header));
+    const metadata = z.object({ name: z.string().min(1), description: z.string().min(1) }).parse(parseSkillFrontmatter(header));
     const prefix = data.packages.find(pkg => inside(contained(repo, pkg.path), dir))?.skill_prefix;
     const name = prefix ? prefix + '-' + metadata.name : metadata.name;
     if (names.has(name)) throw new Error('Duplicate skill metadata name: ' + name);

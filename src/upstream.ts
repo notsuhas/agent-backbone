@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { z } from 'zod';
-import { parse } from 'yaml';
+import { parseSkillFrontmatter } from './frontmatter.js';
 import { type Manifest, type Package, type Upstream, checksSchema, installerSchema } from './model.js';
 import { manifest } from './delivery.js';
 import { repositoryURL, paths, contained, inside, real, isLink, exists, readJSON, saveJSON, run, walk, validateLinks, backupDir } from './files.js';
@@ -70,7 +70,7 @@ async function updatePackage(repo: string, data: Manifest, pkg: Package) {
     if (pkg.skill_naming === 'frontmatter') for (const candidate of candidates) {
       const text = fs.readFileSync(path.join(staged, candidate.relative, 'SKILL.md'), 'utf8');
       const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
-      candidate.name = z.object({ name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/) }).parse(frontmatter ? parse(frontmatter) : {}).name;
+      candidate.name = z.object({ name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/) }).parse(frontmatter ? parseSkillFrontmatter(frontmatter) : {}).name;
     }
     if (pkg.skill_prefix) for (const candidate of candidates) candidate.name = pkg.skill_prefix + '-' + candidate.name;
     const names = new Set<string>();

@@ -594,12 +594,14 @@ test('upstream updates preserve prefixed skills without replacing another packag
   const f = fixture(); t.after(f.cleanup);
   const upstream = path.join(f.root, 'upstream'); fs.mkdirSync(upstream); f.git(upstream, 'init', '-b', 'main');
   skill(path.join(upstream, 'skills/tdd'), 'tdd', 'Latest vendor content');
-  skill(path.join(upstream, 'skills/new-skill'), 'new-skill', 'New vendor skill'); f.commit(upstream);
+  skill(path.join(upstream, 'skills/new-skill'), 'new-skill', 'New vendor skill');
+  const metadata = path.join(upstream, 'skills/new-skill/SKILL.md');
+  write(metadata, read(metadata).replace('description: fixture', 'description: Software factory: tasks and services')); f.commit(upstream);
   skill(path.join(f.repo, 'skills/tdd'), 'tdd', 'Existing independent skill');
   const pkg = path.join(f.repo, 'packages/vendor'); skill(path.join(pkg, 'skills/tdd'), 'tdd', 'Old vendor content');
   fs.symlinkSync('../packages/vendor/skills/tdd', path.join(f.repo, 'skills/matt-tdd'));
   const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
-  data.packages.push({ name: 'vendor', path: 'packages/vendor', claude_plugin: false, local_files: [], skill_prefix: 'matt', upstream: { repository: upstream, path: '.', ref: 'main' } });
+  data.packages.push({ name: 'vendor', path: 'packages/vendor', claude_plugin: false, local_files: [], skill_prefix: 'matt', skill_naming: 'frontmatter', upstream: { repository: upstream, path: '.', ref: 'main' } });
   write(path.join(f.repo, 'backbone.json'), JSON.stringify(data)); f.push();
   f.cli('upstream', 'update', '--all', '--repository', f.repo);
   assert.match(read(path.join(f.repo, 'skills/matt-tdd/SKILL.md')), /Latest vendor content/);
@@ -610,6 +612,9 @@ test('upstream updates preserve prefixed skills without replacing another packag
   f.cli('validate', '--repository', f.repo);
   f.cli('configure', f.repo, '--agents', 'codex', '--no-background');
   assert.match(read(path.join(f.home, '.agents/skills/matt-tdd/SKILL.md')), /name: matt-tdd/);
+  const delivered = read(path.join(f.home, '.agents/skills/matt-new-skill/SKILL.md'));
+  assert.match(delivered, /name: matt-new-skill/);
+  assert.match(delivered, /description: "Software factory: tasks and services"/);
   assert.match(read(path.join(f.home, '.agents/skills/tdd/SKILL.md')), /name: tdd/);
   assert.match(read(path.join(f.repo, 'packages/vendor/skills/tdd/SKILL.md')), /name: tdd/);
 });
