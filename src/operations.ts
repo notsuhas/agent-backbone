@@ -14,9 +14,9 @@ function recordCopies(current: Config) {
   current.managed_copies = Object.fromEntries(entries.map(([target]) => [target, digest(target)]));
   current.managed_source_hashes = Object.fromEntries(entries.map(([target, source]) => [target, digest(source)]));
 }
-interface IConfigure { repository: string; destination?: string; agents: string; interval: number; noBackground: boolean }
-async function installIntegration(current: Config, noBackground: boolean) {
-  const { home, state } = paths(), bin = path.join(home, '.local/bin');
+interface IConfigure { repository: string; destination?: string; agents: string }
+async function installIntegration(current: Config) {
+  const { home } = paths(), bin = path.join(home, '.local/bin');
   fs.mkdirSync(bin, { recursive: true });
   const skillshare = path.join(bin, 'skillshare');
   const bridge = '#!/bin/sh\nexec ' + quote(current.command) + ' skillshare "$@"\n';
@@ -33,27 +33,70 @@ async function installIntegration(current: Config, noBackground: boolean) {
   const helper = path.join(bin, 'agent-backbone-refresh');
   atomicWrite(helper, '#!/bin/sh\nexec ' + quote(current.command) + ' sync --startup\n');
   fs.chmodSync(helper, 0o755);
+  const settings = path.join(home, '.claude/settings.json');
+  if (current.targets.includes('claude') && exists(settings)) fs.copyFileSync(isLink(settings) ? real(settings) : settings, path.join(current.backup, 'claude-settings.json'));
+  await sessionRefresh(current);
+}
+const sessionHookSchema = z.object({ hooks: z.array(z.object({ command: z.string().optional() }).passthrough()).optional() }).passthrough();
+function saveIfChanged(file: string, document: unknown) {
+  const text = JSON.stringify(document, null, 2) + '\n';
+  if (exists(file) && fs.readFileSync(file, 'utf8') === text) return;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  atomicWrite(file, text);
+}
+function withRefresh(entries: unknown, entry: Record<string, unknown>, helpers: string[]) {
+  const sessions = z.array(sessionHookSchema).parse(entries || []);
+  return [...sessions.filter(item => !(item.hooks?.length === 1 && helpers.includes(item.hooks[0]?.command || ''))), entry];
+}
+// Refresh runs when an agent session starts: Claude and Codex SessionStart hooks, an OpenCode plugin,
+// and Cursor's sessionStart hook (Grok also reads the Claude and Cursor hook files). No background timer.
+export async function sessionRefresh(current: Config) {
+  const { home } = paths(), bin = path.join(home, '.local/bin');
+  const helper = path.join(bin, 'agent-backbone-refresh'), helpers = [helper, path.join(bin, 'skill-backbone-refresh')];
+  const object = z.record(z.string(), z.unknown());
   if (current.targets.includes('claude')) {
     const file = path.join(home, '.claude/settings.json'), target = isLink(file) ? real(file) : file;
-    const document = z.record(z.string(), z.unknown()).parse(readJSON(target));
-    const hookSchema = z.object({ hooks: z.array(z.object({ command: z.string().optional() }).passthrough()).optional() }).passthrough();
-    const hooks = z.record(z.string(), z.unknown()).parse(document.hooks || {});
-    const sessions = z.array(hookSchema).parse(hooks.SessionStart || []);
-    const oldHelper = path.join(bin, 'skill-backbone-refresh');
-    hooks.SessionStart = [...sessions.filter(entry => !(entry.hooks?.length === 1 && [helper, oldHelper].includes(entry.hooks[0]?.command || ''))), { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper, timeout: 30 }] }];
+    const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
+    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helpers);
     document.hooks = hooks;
-    if (exists(target)) fs.copyFileSync(target, path.join(current.backup, 'claude-settings.json'));
-    saveJSON(target, document);
+    saveIfChanged(target, document);
   }
-  if (!noBackground && process.platform === 'darwin') {
-    const domain = 'gui/' + process.getuid?.(), label = 'ai.agent-backbone.refresh';
-    await run(['launchctl', 'bootout', domain + '/ai.skill-backbone.refresh']).catch(() => {});
-    fs.rmSync(path.join(home, 'Library/LaunchAgents/ai.skill-backbone.refresh.plist'), { force: true });
-    const escape = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+  if (current.targets.includes('codex')) {
+    const file = path.join(home, '.codex/hooks.json'), target = isLink(file) ? real(file) : file;
+    const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
+    hooks.SessionStart = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helpers);
+    document.hooks = hooks;
+    saveIfChanged(target, document);
+  }
+  if (current.targets.includes('opencode')) {
+    const file = path.join(home, '.config/opencode/plugins/agent-backbone-refresh.js');
+    const text = '// Managed by Agent Backbone; configure and refresh overwrite this file.\n'
+      + '// Refreshes shared skills, instructions and MCP definitions when OpenCode starts and when a session is created.\n'
+      + 'import { spawn } from "node:child_process";\n\n'
+      + 'const HELPER = ' + JSON.stringify(helper) + ';\n'
+      + 'function refresh() {\n  try { spawn(HELPER, [], { detached: true, stdio: "ignore" }).unref(); } catch {}\n}\n\n'
+      + 'export const AgentBackboneRefresh = async () => {\n  refresh();\n  return {\n    event: async ({ event }) => {\n      if (event?.type === "session.created") refresh();\n    },\n  };\n};\n';
+    if (!exists(file) || fs.readFileSync(file, 'utf8') !== text) { fs.mkdirSync(path.dirname(file), { recursive: true }); atomicWrite(file, text); }
+  }
+  if (exists(path.join(home, '.cursor'))) {
+    const file = path.join(home, '.cursor/hooks.json'), target = isLink(file) ? real(file) : file;
+    const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
+    const sessions = z.array(z.object({ command: z.string().optional() }).passthrough()).parse(hooks.sessionStart || []);
+    hooks.sessionStart = [...sessions.filter(item => !helpers.includes(item.command || '')), { command: helper }];
+    document.hooks = hooks;
+    document.version ??= 1;
+    saveIfChanged(target, document);
+  }
+  await removeTimer();
+}
+// Earlier versions installed a launchd timer that refreshed every 15 minutes. Remove it wherever it remains.
+async function removeTimer() {
+  const { home } = paths();
+  for (const label of ['ai.agent-backbone.refresh', 'ai.skill-backbone.refresh']) {
     const plist = path.join(home, 'Library/LaunchAgents', label + '.plist');
-    atomicWrite(plist, '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>' + label + '</string><key>ProgramArguments</key><array><string>' + escape(current.command) + '</string><string>sync</string><string>--startup</string></array><key>StartInterval</key><integer>' + current.interval + '</integer><key>RunAtLoad</key><true/><key>StandardOutPath</key><string>' + escape(path.join(state, 'background.log')) + '</string><key>StandardErrorPath</key><string>' + escape(path.join(state, 'background-error.log')) + '</string></dict></plist>\n');
-    await run(['launchctl', 'bootout', domain + '/' + label]).catch(() => {});
-    await run(['launchctl', 'bootstrap', domain, plist]).catch(() => process.stderr.write('Background timer unavailable; launch refresh remains enabled.\n'));
+    if (!exists(plist)) continue;
+    if (process.platform === 'darwin') await run(['launchctl', 'bootout', 'gui/' + process.getuid?.() + '/' + label]).catch(() => {});
+    fs.rmSync(plist, { force: true });
   }
 }
 export async function configure(options: IConfigure) {
@@ -83,10 +126,10 @@ export async function configure(options: IConfigure) {
       if (exists(current) || isLink(current)) { const target = path.join(backup, 'original-' + agent); fs.renameSync(current, target); originals[agent] = target; }
       else if (found) originals[agent] = found;
     }
-    const current = configSchema.parse({ repo, agents: originals, targets: agents, engine, command: commandPath(), managed_links: managed, disabled_skills: disabled, interval: options.interval, backup });
+    const current = configSchema.parse({ repo, agents: originals, targets: agents, engine, command: commandPath(), managed_links: managed, disabled_skills: disabled, backup });
     recordCopies(current);
     saveJSON(path.join(directory, 'config.json'), current);
-    await installIntegration(current, options.noBackground);
+    await installIntegration(current);
     process.stdout.write('Configured ' + repo + ' for ' + agents.join(', ') + '. Backups: ' + backup + '\n');
   });
   await sync(true);
@@ -104,7 +147,8 @@ export async function sync(startup = false) {
       current.disabled_skills = await engineSelection(current, data);
       current.managed_links = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('sync-backup'), engine: current.engine, disabled: current.disabled_skills });
       recordCopies(current);
-    saveJSON(path.join(directory, 'config.json'), current);
+      saveJSON(path.join(directory, 'config.json'), current);
+      await sessionRefresh(current);
       health.status = 'current'; health.reason = null; health.last_success = Date.now() / 1000;
       await upstreamCheck(current.repo, data, false, true);
     } catch (error) {
