@@ -101,7 +101,7 @@ Each refresh writes exactly the listed keys and leaves every other local key alo
 
 Claude plugins listed as enabled are installed with `claude plugin install` when missing. Plugins ending in `@synced` are skipped: they come from the claude.ai account, and Claude syncs them itself.
 
-Keys owned elsewhere are refused: Claude `hooks` and `mcpServers`; Codex `mcp_servers`, `hooks` and `projects`; OpenCode `mcp`; Grok `hooks`. Never put logins, tokens or machine-specific paths in these files.
+Keys owned elsewhere are refused: Claude `hooks` and `mcpServers`; Codex `mcp_servers`, `hooks` and `projects`; OpenCode `mcp`; Grok `hooks` and `mcp_servers`. Never put logins, tokens or machine-specific paths in these files.
 
 ## Subagents
 

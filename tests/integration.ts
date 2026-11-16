@@ -513,6 +513,8 @@ test('shared settings from Git merge into every agent and leave local keys alone
   f.cli('validate', '--repository', f.repo);
   write(path.join(f.repo, 'settings/codex.toml'), '[mcp_servers.bad]\ncommand = "x"\n');
   assert.match(f.cliFail('validate', '--repository', f.repo).stderr, /may not set mcp_servers/);
+  fs.rmSync(path.join(f.repo, 'settings/codex.toml')); write(path.join(f.repo, 'settings/grok.toml'), '[mcp_servers.bad]\ncommand = "x"\n');
+  assert.match(f.cliFail('validate', '--repository', f.repo).stderr, /grok\.toml may not set mcp_servers/);
 });
 
 test('a settings file that cannot be edited is reported and skipped while the refresh continues', t => {

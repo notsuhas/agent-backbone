@@ -23,7 +23,7 @@ function targets(): Target[] {
     { agent: 'claude', source: 'claude.json', format: 'json', file: () => path.join(home, '.claude/settings.json'), reserved: [['hooks'], ['mcpServers']] },
     { agent: 'codex', source: 'codex.toml', format: 'toml', file: () => path.join(home, '.codex/config.toml'), reserved: [['mcp_servers'], ['hooks'], ['projects']] },
     { agent: 'opencode', source: 'opencode.json', format: 'json', file: () => firstExisting(path.join(home, '.config/opencode/opencode.jsonc'), path.join(home, '.config/opencode/opencode.json')), reserved: [['mcp']] },
-    { agent: 'grok', source: 'grok.toml', format: 'toml', file: () => exists(path.join(home, '.grok')) ? path.join(home, '.grok/config.toml') : undefined, reserved: [['hooks']] },
+    { agent: 'grok', source: 'grok.toml', format: 'toml', file: () => exists(path.join(home, '.grok')) ? path.join(home, '.grok/config.toml') : undefined, reserved: [['hooks'], ['mcp_servers']] },
     { agent: 'cursor', source: 'cursor.json', format: 'json', file: () => exists(cursorDir) ? path.join(cursorDir, 'settings.json') : undefined, reserved: [] },
   ];
 }
