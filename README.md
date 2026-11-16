@@ -103,6 +103,14 @@ Claude plugins listed as enabled are installed with `claude plugin install` when
 
 Keys owned elsewhere are refused: Claude `hooks` and `mcpServers`; Codex `mcp_servers`, `hooks` and `projects`; OpenCode `mcp`; Grok `hooks`. Never put logins, tokens or machine-specific paths in these files.
 
+## Subagents
+
+Put one Markdown file per subagent in `subagents/`, named after it, with `name` and `description` frontmatter and the instructions as the body. Each refresh writes it to every harness in that harness's format: `~/.claude/agents/NAME.md`, `~/.codex/agents/NAME.toml` (as `developer_instructions`), `~/.config/opencode/agents/NAME.md` (with `mode: subagent`), and, when those apps are installed, `~/.cursor/agents/NAME.md` and `~/.grok/agents/NAME.md`. Removing the file from Git removes it everywhere. Backbone never overwrites an agent file it did not write; it reports the clash instead.
+
+## Refresh commands
+
+`backbone.json` may list `refresh` commands. They run from the repository root after every refresh, so they run whichever harness started the session. A failing command is reported and does not stop the refresh. Only list commands you would run yourself.
+
 ## Refresh and safety
 
 Refresh runs before a launcher starts an agent and from each agent's session-start hook. Version and help probes (`--version`, `-h` and similar) skip it. Codex needs `[features] hooks = true`; Backbone records the trust hash for its own refresh hook in `~/.codex/config.toml`, so Codex runs it without asking, while other hooks still need your approval.
@@ -131,7 +139,8 @@ Run the dashboard through the managed launcher so package filtering stays active
 - `~/.config/opencode/plugins/agent-backbone-refresh.js`
 - The Codex hook trust record in `~/.codex/config.toml`
 - Configuration in `~/.config/agent-backbone/` and generated skill views in `~/.local/share/agent-backbone/active/`
-- State under `~/.local/state/agent-backbone/`, including the shared-settings ledger `settings-managed.json`
+- Subagent files listed under Subagents
+- State under `~/.local/state/agent-backbone/`, including the ledgers `settings-managed.json` and `subagents-managed.json`
 
 Each configure, refresh, toggle and upstream update saves what it replaces in a new `backup-*`, `sync-backup-*`, `toggle-backup-*`, `native-backup-*` or `upstream-backup-*` directory under `~/.local/state/agent-backbone/`. The configure backup holds the original `skillshare` and agent executables.
 

@@ -505,6 +505,27 @@ test('shared settings from Git merge into every agent and leave local keys alone
   assert.match(f.cliFail('validate', '--repository', f.repo).stderr, /may not set mcp_servers/);
 });
 
+test('subagents reach every harness in its own format and refresh commands run', t => {
+  const f = fixture(); t.after(f.cleanup);
+  fs.mkdirSync(path.join(f.home, '.cursor'), { recursive: true }); fs.mkdirSync(path.join(f.home, '.grok'), { recursive: true });
+  write(path.join(f.home, '.claude/agents/mine.md'), 'local agent\n');
+  write(path.join(f.repo, 'subagents/reviewer.md'), '---\nname: reviewer\ndescription: Reviews a diff: bugs first\n---\nReview the diff.\n');
+  write(path.join(f.repo, 'subagents/mine.md'), '---\nname: mine\ndescription: Would clash\n---\nBody\n');
+  const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
+  write(path.join(f.repo, 'backbone.json'), JSON.stringify({ ...data, refresh: ['touch "$HOME/refreshed"'] }));
+  f.push(); f.configure();
+  assert.equal(read(path.join(f.home, '.claude/agents/reviewer.md')), '---\nname: reviewer\ndescription: "Reviews a diff: bugs first"\n---\n\nReview the diff.\n');
+  assert.match(read(path.join(f.home, '.config/opencode/agents/reviewer.md')), /mode: subagent/);
+  assert.equal(read(path.join(f.home, '.codex/agents/reviewer.toml')), "name = \"reviewer\"\ndescription = \"Reviews a diff: bugs first\"\ndeveloper_instructions = '''\nReview the diff.\n'''\n");
+  assert.ok(fs.existsSync(path.join(f.home, '.cursor/agents/reviewer.md')) && fs.existsSync(path.join(f.home, '.grok/agents/reviewer.md')));
+  assert.equal(read(path.join(f.home, '.claude/agents/mine.md')), 'local agent\n');
+  assert.ok(fs.existsSync(path.join(f.home, 'refreshed')));
+  fs.unlinkSync(path.join(f.repo, 'subagents/reviewer.md')); f.push(); f.cli('sync');
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/agents/reviewer.md')) && !fs.existsSync(path.join(f.home, '.codex/agents/reviewer.toml')));
+  assert.equal(read(path.join(f.home, '.claude/agents/mine.md')), 'local agent\n');
+  assert.match(f.cli('validate', '--repository', f.repo).stdout, /1 subagents/);
+});
+
 test('migration removes generated plugin exclusions in modern Skillshare target syntax', t => {
   const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
   const control = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');

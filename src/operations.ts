@@ -9,6 +9,7 @@ import { upstreamCheck } from './upstream.js';
 import { syncRuntimes } from './runtimes.js';
 import { createHash } from 'node:crypto';
 import { applySettings } from './settings.js';
+import { applySubagents } from './subagents.js';
 
 function recordCopies(current: Config) {
   const entries = Object.entries(current.managed_links).filter(([target]) => exists(target) && !isLink(target) && fs.statSync(target).isDirectory());
@@ -50,6 +51,10 @@ function withRefresh(entries: unknown, entry: Record<string, unknown>, helper: s
   return [...sessions.filter(item => !(item.hooks?.length === 1 && item.hooks[0]?.command === helper)), entry];
 }
 // Installs the session-start refresh hooks for each agent.
+// Commands listed under refresh in backbone.json run from the repository root after every refresh, in any harness.
+async function runRefreshCommands(repo: string, commands: string[]) {
+  for (const command of commands) await run(['sh', '-c', command], repo, 30000).catch(error => process.stderr.write('Refresh command failed (' + command + '): ' + (error instanceof Error ? error.message : String(error)) + '\n'));
+}
 async function sessionRefresh(current: Config) {
   const { home } = paths(), helper = path.join(home, '.local/bin/agent-backbone-refresh');
   const object = z.record(z.string(), z.unknown());
@@ -173,6 +178,8 @@ export async function sync(startup = false) {
       recordCopies(current);
       saveJSON(path.join(directory, 'config.json'), current);
       await applySettings(current);
+      applySubagents(current);
+      await runRefreshCommands(current.repo, data.refresh);
       await sessionRefresh(current);
       health.status = 'current'; health.reason = null; health.last_success = Date.now() / 1000;
       await upstreamCheck(data, false, true);
