@@ -85,19 +85,11 @@ const segment = String.raw`"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+`;
 const header = new RegExp(String.raw`^\s*\[\s*((?:${segment})(?:\s*\.\s*(?:${segment}))*)\s*\]\s*(#.*)?$`);
 function headerPath(line: string): string[] | undefined {
   const match = header.exec(line);
-  if (!match) return undefined;
-  const parts: string[] = [], text = match[1]!.trim();
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] === '"') { let j = i + 1, value = ''; while (j < text.length && text[j] !== '"') { if (text[j] === '\\') j++; value += text[j]; j++; } parts.push(value); i = j + 1; }
-    else if (text[i] === "'") { const j = text.indexOf("'", i + 1); parts.push(text.slice(i + 1, j)); i = j + 1; }
-    else { let j = i; while (j < text.length && !/[.\s]/.test(text[j]!)) j++; parts.push(text.slice(i, j)); i = j; }
-    while (i < text.length && /[\s.]/.test(text[i]!)) i++;
-  }
-  return parts;
+  return match ? [...match[1]!.matchAll(new RegExp(segment, 'g'))].map(part => unquote(part[0])) : undefined;
 }
 const assignment = new RegExp(String.raw`^\s*((?:${segment})(?:\s*\.\s*(?:${segment}))*)\s*=`);
-const unquote = (raw: string) => raw.startsWith('"') ? z.string().parse(JSON.parse(raw)) : raw.startsWith("'") ? raw.slice(1, -1) : raw;
+// TOML's own parser decodes a quoted key, so escapes such as \t and \U0001F600 match the real key.
+const unquote = (raw: string) => raw.startsWith('"') ? z.string().parse(object.parse(parseTOML('k = ' + raw)).k) : raw.startsWith("'") ? raw.slice(1, -1) : raw;
 const startsWith = (list: string[], prefix: string[]) => prefix.length <= list.length && prefix.every((part, index) => list[index] === part);
 interface Entry { key: string[]; start: number; end: number }
 interface Section { path: string[]; start: number; end: number; entries: Entry[] }

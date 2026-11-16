@@ -688,6 +688,16 @@ test('TOML headers with brackets inside quoted keys keep keys in their own table
   assert.equal(JSON.stringify(parsed.projects), '{"/p/[w]":{"trust_level":"trusted"}}');
 });
 
+test('TOML header escapes are decoded before matching tables', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const codex = path.join(f.home, '.codex/config.toml');
+  write(codex, '[desktop."a\\tb"]\nx = 1\n\n[desktop.atb]\nx = 9\n\n[desktop."\\u00e9"]\nz = 1\n');
+  write(path.join(f.repo, 'settings/codex.toml'), '[desktop.atb]\nx = 2\n\n[desktop."é"]\ny = true\n');
+  f.push(); f.configure();
+  const parsed = z.record(z.string(), z.unknown()).parse(parseTOML(read(codex)));
+  assert.equal(JSON.stringify(parsed.desktop), JSON.stringify({ 'a\tb': { x: 1 }, atb: { x: 2 }, 'é': { z: 1, y: true } }));
+});
+
 test('subagents reach every harness in its own format and refresh commands run', t => {
   const f = fixture(); t.after(f.cleanup);
   fs.mkdirSync(path.join(f.home, '.cursor'), { recursive: true }); fs.mkdirSync(path.join(f.home, '.grok'), { recursive: true });
