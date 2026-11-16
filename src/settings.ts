@@ -143,7 +143,7 @@ function refuseOtherForms(sections: Section[], parts: string[]) {
 }
 function editTOML(text: string, set: Leaf[], remove: string[][]) {
   parseTOML(text);
-  const lines = text.split('\n');
+  const lines = text.split('\n'), retained: string[][] = [];
   const locate = (parts: string[]) => {
     const sections = scan(lines), table = id(parts.slice(0, -1)), key = parts[parts.length - 1]!;
     const section = sections.find(entry => id(entry.path) === table);
@@ -155,7 +155,10 @@ function editTOML(text: string, set: Leaf[], remove: string[][]) {
       // Still set in another form: keep it managed and say so, rather than leave it active forever.
       let value: unknown = parseTOML(lines.join('\n'));
       for (const part of parts) value = isObject(value) ? value[part] : undefined;
-      if (value !== undefined) throw new Error(parts.join('.') + ' is set with a dotted key or inline table here; move it under a [' + parts.slice(0, -1).map(tomlKey).join('.') + '] header so it can be removed');
+      if (value !== undefined) {
+        retained.push(parts);
+        process.stderr.write(parts.join('.') + ' is set with a dotted key or inline table here; move it under a [' + parts.slice(0, -1).map(tomlKey).join('.') + '] header so it can be removed\n');
+      }
       continue;
     }
     const count = entry.end - entry.start + 1, end = section.end - count;
@@ -179,7 +182,7 @@ function editTOML(text: string, set: Leaf[], remove: string[][]) {
   let result = lines.join('\n');
   if (!result.endsWith('\n')) result += '\n';
   parseTOML(result);
-  return result;
+  return { text: result, retained };
 }
 
 function readDesired(repo: string, target: Target): Leaf[] | undefined {
@@ -229,10 +232,11 @@ async function applyTarget(current: Config, target: Target, file: string | undef
   const stale = previous.filter(parts => !wanted.has(id(parts)));
   const destination = isLink(file) ? real(file) : file;
   const text = exists(destination) ? fs.readFileSync(destination, 'utf8') : '';
-  const result = target.format === 'json' ? editJSON(text, desired, stale, destination) : editTOML(text, desired, stale);
+  const edited = target.format === 'json' ? { text: editJSON(text, desired, stale, destination), retained: [] } : editTOML(text, desired, stale);
+  const result = edited.text;
   if (result !== text && (exists(destination) || desired.length)) atomicWrite(destination, result);
   if (target.agent === 'claude') await installClaudePlugins(current, desired);
-  return desired.map(leaf => leaf.path);
+  return [...desired.map(leaf => leaf.path), ...edited.retained];
 }
 
 // Claude plugins listed as enabled in settings/claude.json are installed when missing.
