@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { parse as parseYAML } from 'yaml';
+import { parse as parseJSONC } from 'jsonc-parser';
 import { configSchema, healthSchema, manifestSchema } from '../src/model.js';
 import { codexHookTrustHash } from '../src/operations.js';
 
@@ -473,7 +474,7 @@ test('shared settings from Git merge into every agent and leave local keys alone
   const cursorDir = process.platform === 'darwin' ? path.join(f.home, 'Library/Application Support/Cursor/User') : path.join(f.home, '.config/Cursor/User');
   write(path.join(f.home, '.claude/settings.json'), JSON.stringify({ theme: 'light', localOnly: 1, skillOverrides: { cloudflare: 'off' }, enabledPlugins: { 'local@x': true } }));
   write(path.join(f.home, '.codex/config.toml'), '# my comment\nmodel = "old"\nkeep = 1\n\n[projects."/tmp/p"]\ntrust_level = "trusted"\n\n[mcp_servers.local]\ncommand = "x"\n');
-  write(path.join(f.home, '.config/opencode/opencode.jsonc'), '{\n  // comment\n  "mcp": { "local": { "type": "local" } },\n  "plugin": ["old"],\n}\n');
+  write(path.join(f.home, '.config/opencode/opencode.jsonc'), '{\n  // comment\n  "mcp": { "local": { "type": "local" } },\n  /* block */ "note": "a, ]",\n  "plugin": ["old"],\n}\n');
   write(path.join(cursorDir, 'settings.json'), '{ "editor.fontSize": 12 }');
   write(path.join(f.repo, 'settings/claude.json'), JSON.stringify({ theme: 'dark', skillOverrides: {}, enabledPlugins: { 'shared@y': false }, statusLine: { type: 'command', command: 'echo hi' } }));
   write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\napproval_policy = "never"\n\n[features]\nhooks = true\n\n[apps."connector_1"]\nenabled = false\n');
@@ -490,8 +491,10 @@ test('shared settings from Git merge into every agent and leave local keys alone
   assert.match(codex, /\[mcp_servers\.local\]\ncommand = "x"/);
   assert.match(codex, /\[features\]\nhooks = true/);
   assert.match(codex, /\[apps\.connector_1\]\nenabled = false/);
-  const opencode = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.config/opencode/opencode.jsonc')));
-  assert.deepEqual(opencode.plugin, []); assert.deepEqual(opencode.tools, { 'argent*': true }); assert.deepEqual(opencode.mcp, { local: { type: 'local' } });
+  const opencodeText = read(path.join(f.home, '.config/opencode/opencode.jsonc'));
+  assert.ok(opencodeText.includes('  // comment\n  "mcp": { "local": { "type": "local" } },\n  /* block */ "note": "a, ]",\n'));
+  const opencode = z.record(z.string(), z.unknown()).parse(parseJSONC(opencodeText));
+  assert.equal(opencode.note, 'a, ]'); assert.deepEqual(opencode.plugin, []); assert.deepEqual(opencode.tools, { 'argent*': true }); assert.deepEqual(opencode.mcp, { local: { type: 'local' } });
   assert.deepEqual(json(path.join(cursorDir, 'settings.json')), { 'editor.fontSize': 12, 'window.commandCenter': true });
   write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\n\n[features]\nhooks = true\n');
   write(path.join(f.repo, 'settings/claude.json'), JSON.stringify({ theme: 'dark' }));

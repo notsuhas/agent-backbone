@@ -97,7 +97,7 @@ Put the settings every machine should share in `settings/`:
 | `grok.toml` | `~/.grok/config.toml`, when `~/.grok` exists |
 | `cursor.json` | Cursor's user `settings.json`, when Cursor is installed |
 
-Each refresh writes exactly the listed keys and leaves every other local key alone. Removing a key from Git removes it locally on the next refresh. Objects merge key by key; arrays and scalars replace. TOML files are edited line by line, so comments and unmanaged tables stay as they are.
+Each refresh writes exactly the listed keys and leaves every other local key alone. Removing a key from Git removes it locally on the next refresh. Objects merge key by key; arrays and scalars replace. JSON and JSONC files are edited key by key and TOML files line by line, so comments, formatting and unmanaged keys stay as they are.
 
 Claude plugins listed as enabled are installed with `claude plugin install` when missing. Plugins ending in `@synced` are skipped: they come from the claude.ai account, and Claude syncs them itself.
 

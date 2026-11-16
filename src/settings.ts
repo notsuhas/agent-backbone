@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { applyEdits, findNodeAtLocation, getNodeValue, modify, parse as parseJSON, parseTree, printParseErrorCode, type ParseError } from 'jsonc-parser';
 import { parse as parseTOML } from 'smol-toml';
 import { z } from 'zod';
 import { exists, isLink, real, readJSON, saveJSON, atomicWrite, paths, run } from './files.js';
@@ -33,30 +35,40 @@ function leaves(value: unknown, prefix: string[] = []): Leaf[] {
 }
 const id = (parts: string[]) => JSON.stringify(parts);
 
-function stripJSONC(text: string) {
-  let out = '', inString = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i]!, next = text[i + 1];
-    if (inString) { out += char; if (char === '\\') { out += next ?? ''; i++; } else if (char === '"') inString = false; continue; }
-    if (char === '"') { inString = true; out += char; continue; }
-    if (char === '/' && next === '/') { while (i < text.length && text[i] !== '\n') i++; out += '\n'; continue; }
-    if (char === '/' && next === '*') { i += 2; while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++; i++; continue; }
-    out += char;
-  }
-  return out.replace(/,(\s*[}\]])/g, '$1');
+function parseJSONC(text: string, label: string): unknown {
+  if (!text.trim()) return {};
+  const errors: ParseError[] = [], value: unknown = parseJSON(text, errors, { allowTrailingComma: true });
+  if (errors[0]) throw new Error(label + ' is not valid JSON: ' + printParseErrorCode(errors[0].error) + ' at offset ' + errors[0].offset);
+  return value;
 }
-function readSettingsJSON(file: string) { return exists(file) ? object.parse(JSON.parse(stripJSONC(fs.readFileSync(file, 'utf8')) || '{}')) : {}; }
 
-function setJSON(document: Record<string, unknown>, parts: string[], value: unknown) {
-  let node = document;
-  for (const key of parts.slice(0, -1)) { if (!isObject(node[key])) node[key] = {}; node = node[key] as Record<string, unknown>; }
-  node[parts[parts.length - 1]!] = value;
-}
-function deleteJSON(document: Record<string, unknown>, parts: string[]) {
-  const stack: Record<string, unknown>[] = [document];
-  for (const key of parts.slice(0, -1)) { const next = stack[stack.length - 1]![key]; if (!isObject(next)) return; stack.push(next); }
-  delete stack[stack.length - 1]![parts[parts.length - 1]!];
-  for (let i = stack.length - 1; i > 0; i--) if (!Object.keys(stack[i]!).length) delete stack[i - 1]![parts[i - 1]!];
+// JSON is edited key by key with jsonc-parser so comments and formatting outside the managed keys survive.
+const formatting = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: '\n' } };
+function editJSON(text: string, set: Leaf[], remove: string[][], label: string) {
+  object.parse(parseJSONC(text, label));
+  let result = text;
+  const at = (parts: string[]) => { const root = parseTree(result), node = root && findNodeAtLocation(root, parts); return node && { type: node.type, value: getNodeValue(node) as unknown }; };
+  const edit = (parts: string[], value: unknown) => { result = applyEdits(result, modify(result, parts, value, formatting)); };
+  for (const parts of remove) {
+    if (!at(parts)) continue;
+    edit(parts, undefined);
+    for (let depth = parts.length - 1; depth > 0; depth--) {
+      const parent = at(parts.slice(0, depth));
+      if (parent?.type !== 'object' || Object.keys(object.parse(parent.value)).length) break;
+      edit(parts.slice(0, depth), undefined);
+    }
+  }
+  for (const leaf of set) {
+    const current = at(leaf.path);
+    if (current && isDeepStrictEqual(current.value, leaf.value)) continue;
+    // A non-object on the way to the key is replaced by the nested object.
+    const depth = leaf.path.slice(1).findIndex((_, index) => { const node = at(leaf.path.slice(0, index + 1)); return !!node && node.type !== 'object'; }) + 1;
+    if (depth > 0) edit(leaf.path.slice(0, depth), leaf.path.slice(depth).reduceRight<unknown>((value, key) => ({ [key]: value }), leaf.value));
+    else edit(leaf.path, leaf.value);
+  }
+  if (!text && result) result += '\n';
+  parseJSONC(result, label);
+  return result;
 }
 
 // TOML is edited line by line so comments, ordering and everything Backbone does not manage stay untouched.
@@ -132,7 +144,7 @@ function readDesired(repo: string, target: Target): Leaf[] | undefined {
   const file = path.join(repo, 'settings', target.source);
   if (!exists(file)) return undefined;
   const text = fs.readFileSync(file, 'utf8');
-  const document = target.format === 'json' ? object.parse(JSON.parse(stripJSONC(text))) : object.parse(parseTOML(text));
+  const document = target.format === 'json' ? object.parse(parseJSONC(text, 'settings/' + target.source)) : object.parse(parseTOML(text));
   const list = leaves(document).filter(leaf => leaf.path.length);
   for (const leaf of list) {
     const blocked = target.reserved.find(prefix => prefix.every((part, index) => leaf.path[index] === part));
@@ -173,16 +185,9 @@ async function applyTarget(current: Config, target: Target, file: string | undef
   const wanted = new Set(desired.map(leaf => id(leaf.path)));
   const stale = previous.filter(parts => !wanted.has(id(parts)));
   const destination = isLink(file) ? real(file) : file;
-  if (target.format === 'json') {
-    const document = readSettingsJSON(destination), before = JSON.stringify(document);
-    for (const parts of stale) deleteJSON(document, parts);
-    for (const leaf of desired) setJSON(document, leaf.path, leaf.value);
-    if (JSON.stringify(document) !== before || !exists(destination)) { fs.mkdirSync(path.dirname(destination), { recursive: true }); saveJSON(destination, document); }
-  } else {
-    const text = exists(destination) ? fs.readFileSync(destination, 'utf8') : '';
-    const result = editTOML(text, desired, stale);
-    if (result !== text) { fs.mkdirSync(path.dirname(destination), { recursive: true }); atomicWrite(destination, result); }
-  }
+  const text = exists(destination) ? fs.readFileSync(destination, 'utf8') : '';
+  const result = target.format === 'json' ? editJSON(text, desired, stale, destination) : editTOML(text, desired, stale);
+  if (result !== text) atomicWrite(destination, result);
   if (target.agent === 'claude') await installClaudePlugins(current, desired);
   return desired.map(leaf => leaf.path);
 }
