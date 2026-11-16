@@ -1,6 +1,6 @@
 # Agent Backbone
 
-Agent Backbone keeps the skills, MCP servers, hooks, global instructions and settings of several coding agents (Claude Code, Codex, OpenCode, Cursor and others) in sync with one Git content repository. Each agent session start pulls the repository and applies it, so every machine converges on the same setup without a background job. It wraps [Skillshare](https://github.com/runkids/skillshare), which stays the management interface; Backbone adds the Git refresh, complete plugin packages, shared settings and upstream tracking.
+Agent Backbone keeps the skills, MCP servers, hooks, global instructions and settings of several coding agents (Claude Code, Codex, OpenCode, Cursor and others) in sync with one Git content repository. Run `agent-backbone sync` when you want to pull and apply the latest approved setup. Agent sessions never refresh automatically. It wraps [Skillshare](https://github.com/runkids/skillshare), which stays the management interface; Backbone adds the Git refresh, complete plugin packages, shared settings and upstream tracking.
 
 ```sh
 brew install notsuhas/tap/agent-backbone
@@ -19,7 +19,7 @@ Put `~/.local/bin` first in `PATH`. Configure installs a `~/.local/bin/skillshar
 | Dashboard, terminal manager, ignore patterns, skill toggles and per-agent settings | Skillshare |
 | Skill, agent, MCP, hook and extra delivery; security audits | Skillshare |
 | Shared instruction blocks that preserve local content and symlinks | Skillshare single-file extras |
-| Session-start refresh | Backbone |
+| Manual Git refresh and complete-package reconciliation | Backbone |
 | Disabling individual skills inside complete plugins; keeping package assets and host notes | Backbone |
 | Shared agent settings | Backbone |
 | Upstream provenance and package updates that keep local adapters | Backbone |
@@ -31,15 +31,15 @@ Native Skillshare plugin selection is per target and does not apply individual s
 
 New configurations target Claude, Codex and OpenCode. Choose others with `--agents`, for example `--agents claude,codex,cursor,gemini`.
 
-| Target | Skills | Global instructions | Session-start refresh |
-|---|---|---|---|
-| `claude` | `~/.claude/skills` | `~/.claude/CLAUDE.md` | `SessionStart` hook |
-| `codex` | `~/.agents/skills` | `~/.codex/AGENTS.md` | `SessionStart` hook |
-| `opencode` | `~/.config/opencode/skills` | `~/.config/opencode/AGENTS.md` | Plugin (OpenCode 2 plugin API) |
-| `cursor` | `~/.cursor/skills` | none | `sessionStart` hook |
-| `gemini` | `~/.gemini/skills` | none | none |
+| Target | Skills | Global instructions |
+|---|---|---|
+| `claude` | `~/.claude/skills` | `~/.claude/CLAUDE.md` |
+| `codex` | `~/.agents/skills` | `~/.codex/AGENTS.md` |
+| `opencode` | `~/.config/opencode/skills` | `~/.config/opencode/AGENTS.md` |
+| `cursor` | `~/.cursor/skills` | none |
+| `gemini` | `~/.gemini/skills` | none |
 
-Every target with an executable on `PATH` at configure time also gets a launcher in `~/.local/bin` that refreshes before starting the original executable. When the original is one binary in a native installer's `versions` folder, the launcher starts the newest version there, so the agent keeps updating. Cursor's hook is installed whenever `~/.cursor` exists. When `~/.grok` exists, Grok gets its own `SessionStart` hook file, `~/.grok/hooks/agent-backbone-refresh.json`. Grok can also load the Claude and Cursor hooks for compatibility; a refresh that already ran in the last minute is skipped, so repeats cost nothing.
+Agent launchers run the original executable without syncing. Native versioned installations still use the newest executable version. Configure and manual sync remove Backbone's legacy startup hooks, OpenCode refresh plugin, refresh helper and timer. Other hooks remain intact. `agent-backbone cleanup-startup` performs that cleanup without pulling content.
 
 ## Content repository
 
@@ -109,11 +109,31 @@ Put one Markdown file per subagent in `subagents/`, named after it, with `name` 
 
 ## Refresh commands
 
-`backbone.json` may list `refresh` commands. They run from the repository root after every refresh, so they run whichever harness started the session. A failing command is reported and does not stop the refresh. Only list commands you would run yourself.
+`backbone.json` may list `refresh` commands. They run from the repository root after each manual sync. A failing command is reported and does not stop the refresh. Only list commands you would run yourself.
 
 ## Refresh and safety
 
-Refresh runs before a launcher starts an agent and from each agent's session-start hook. Version and help probes (`--version`, `-h` and similar) skip it. A startup refresh within 60 seconds of the last successful one is skipped, so a launcher and the session hook it leads to refresh once. Session hooks allow 120 seconds. Codex needs `[features] hooks = true`; Backbone records the trust hash for its own refresh hook in `~/.codex/config.toml`, so Codex runs it without asking, while other hooks still need your approval.
+Only explicit commands pull and apply updates. Use `agent-backbone sync`, or its `skillshare pull` alias. The old `sync --startup` invocation is ignored so a cached hook from an earlier release cannot trigger a pull.
+
+```sh
+# Pull approved content and apply skills, settings, MCP definitions and instructions.
+agent-backbone sync
+
+# Inspect local state.
+agent-backbone status
+
+# Publish reviewed source changes.
+cd ~/.local/share/agent-backbone/library
+git status --short
+git diff
+git add <files>
+git commit -m "chore(agents): update my setup"
+git push
+
+# On the other Mac, pull and apply explicitly.
+agent-backbone sync
+```
+
 
 Dirty sources, divergence and network failures keep the cached delivery and report the problem. Dashboard edits apply locally; review, commit and push them to reach other machines. Native ignore patterns, resource settings and copy mode survive refresh. Locally edited managed copies and generated package views are detected and refused.
 
@@ -134,18 +154,14 @@ Run the dashboard through the managed launcher so package filtering stays active
 
 ## Files Backbone writes
 
-- `~/.local/bin/skillshare`, `~/.local/bin/<agent>` and `~/.local/bin/agent-backbone-refresh`
-- The refresh entry in `~/.claude/settings.json` and `~/.codex/hooks.json` (`SessionStart`) and `~/.cursor/hooks.json` (`sessionStart`)
-- `~/.config/opencode/plugins/agent-backbone-refresh.js`, an OpenCode 2 plugin that waits up to 120 seconds for the startup refresh
-- `~/.grok/hooks/agent-backbone-refresh.json`, when `~/.grok` exists
-- The Codex hook trust record in `~/.codex/config.toml`
+- `~/.local/bin/skillshare` and passthrough agent launchers in `~/.local/bin/`
 - Configuration in `~/.config/agent-backbone/` and generated skill views in `~/.local/share/agent-backbone/active/`
 - Subagent files listed under Subagents
 - State under `~/.local/state/agent-backbone/`, including the ledgers `settings-managed.json` and `subagents-managed.json`
 
 Each configure, refresh, toggle and upstream update saves what it replaces in a new `backup-*`, `sync-backup-*`, `toggle-backup-*`, `native-backup-*` or `upstream-backup-*` directory under `~/.local/state/agent-backbone/`. The configure backup holds the original `skillshare` and agent executables.
 
-Homebrew uninstall removes the tool, not content or state. Before uninstalling, remove the launchers and hook entries above and restore the originals from the configure backup.
+Homebrew uninstall removes the tool, not content or state. Before uninstalling, remove the launchers above and restore the originals from the configure backup.
 
 ## Development
 
