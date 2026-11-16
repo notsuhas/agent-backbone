@@ -1,6 +1,6 @@
 # Agent Backbone
 
-A TypeScript adapter around Skillshare for automatic Git refresh and complete plugin delivery. Skillshare is the management interface: its dashboard, terminal manager, toggles, audits, targets, MCP, hooks and extras use one persistent configuration.
+Agent Backbone keeps the skills, MCP servers, hooks, global instructions and settings of several coding agents (Claude Code, Codex, OpenCode, Cursor and others) in sync with one Git content repository. Each agent session start pulls the repository and applies it, so every machine converges on the same setup without a background job. It wraps [Skillshare](https://github.com/runkids/skillshare), which stays the management interface; Backbone adds the Git refresh, complete plugin packages, shared settings and upstream tracking.
 
 ```sh
 brew install notsuhas/tap/agent-backbone
@@ -10,53 +10,104 @@ skillshare ui         # dashboard; keep this terminal running
 skillshare pull       # fetch approved content and apply it
 ```
 
-Configure installs a `~/.local/bin/skillshare` launcher that runs the bundled native engine through the adapter. An existing executable there is retained in the configuration backup. Put `~/.local/bin` first in PATH. Homebrew owns engine upgrades: use `brew upgrade agent-backbone`. `agent-backbone skills`, `manage` and the previous native command aliases remain compatible, but all interactive skill management now uses Skillshare's native terminal UI. There is no second checkbox manager.
+Put `~/.local/bin` first in `PATH`. Configure installs a `~/.local/bin/skillshare` launcher that runs Skillshare with Backbone's configuration. Homebrew owns upgrades of both: use `brew upgrade agent-backbone`.
 
 ## What belongs to which tool
 
 | Responsibility | Owner |
 |---|---|
 | Dashboard, terminal manager, ignore patterns, skill toggles and per-agent settings | Skillshare |
-| Skill/agent/MCP/hook/extra delivery and security audits | Skillshare |
+| Skill, agent, MCP, hook and extra delivery; security audits | Skillshare |
 | Shared instruction blocks that preserve local content and symlinks | Skillshare single-file extras |
-| Session-start refresh for Claude, Codex, OpenCode and Cursor | Backbone adapter |
-| Filter individual disabled skills inside complete plugins; preserve package assets and host notes | Backbone adapter |
-| Upstream provenance, adapter-preserving package updates and daily update PRs | Backbone updater and the content repository |
+| Session-start refresh | Backbone |
+| Disabling individual skills inside complete plugins; keeping package assets and host notes | Backbone |
+| Shared agent settings | Backbone |
+| Upstream provenance and package updates that keep local adapters | Backbone |
+| Scheduled update PRs | The content repository's own CI workflow |
 
-The adapter is needed for this package layout, not for ordinary standalone Skillshare libraries. Native plugin selection is per target; it does not apply the library's individual skill selections inside complete plugin trees. Native `pull` uses its Git root scope and can merge histories. Managed `skillshare pull` instead keeps the existing fast-forward-only refresh and applies all configured resources. Force and other pull options are refused; project mode stays native.
+Native Skillshare plugin selection is per target and does not apply individual skill selections inside complete plugin trees; Backbone fills that gap. Native `pull` can merge histories. The managed `skillshare pull` instead runs a fast-forward-only refresh and applies every resource; force and other pull options are refused. Project mode (`--project`) stays native.
 
-## Content and machine settings
+## Agent targets
 
-Tool code, shared content and OS dotfiles stay separate. A content repository has `skills/`, `packages/`, `instructions/` and `backbone.json`:
+New configurations target Claude, Codex and OpenCode. Choose others with `--agents`, for example `--agents claude,codex,cursor,gemini`.
+
+| Target | Skills | Global instructions | Session-start refresh |
+|---|---|---|---|
+| `claude` | `~/.claude/skills` | `~/.claude/CLAUDE.md` | `SessionStart` hook |
+| `codex` | `~/.agents/skills` | `~/.codex/AGENTS.md` | `SessionStart` hook |
+| `opencode` | `~/.config/opencode/skills` | `~/.config/opencode/AGENTS.md` | Plugin |
+| `cursor` | `~/.cursor/skills` | none | `sessionStart` hook |
+| `gemini` | `~/.gemini/skills` | none | none |
+
+Every target with an executable on `PATH` at configure time also gets a launcher in `~/.local/bin` that refreshes before starting the original executable. Cursor's hook is installed whenever `~/.cursor` exists. Grok reads the Claude and Cursor hook files, so it refreshes too.
+
+## Content repository
+
+A content repository has `skills/`, `packages/`, `instructions/` and `backbone.json`. The default checkout is `~/.local/share/agent-backbone/library/`.
 
 ```json
 {
   "schema_version": 1,
   "skills_dir": "skills",
-  "instructions": [{"path": "instructions/global.md", "agents": ["claude", "codex"]}],
+  "instructions": [{"path": "instructions/global.md", "agents": ["claude", "codex", "opencode"]}],
   "packages": []
 }
 ```
 
-Package declarations support `name`, `path`, `claude_plugin`, `host_notes`, `local_files`, `provenance_file` and `upstream` (`repository`, `path`, `ref`, `approved_tree`, `approved_commit`). Full packages retain their licenses, scripts, references and host adapters. Disabled skills keep receiving approved source updates but are omitted from delivery. Start a new agent session after changing selection.
+`instructions[].agents` defaults to Claude, Codex and OpenCode. `mode` is `append` (default) or `symlink`. Append mode adds the shared file as a block in each agent's instruction file and keeps local text. Symlink mode links every agent's instruction file to one canonical source; it must be the only instruction source for those agents and gets no separate host-policy block, so the shared file must carry any required host guidance.
 
-Native installs into nested folders and tracked repository folders retain their source IDs and assets. The engine resolves target names and filters; flat, standard and prefixed copy naming are verified. Repository-level ignores remain absent from delivery.
+Package declarations support:
 
-Selection and target preferences are per machine, in `~/.config/agent-backbone/skillshare-control.yaml`. Local ignore files are excluded from Git. `agents/`, `extras/` and `mcp.yaml` can hold portable shared definitions; credentials and OAuth state stay local. Existing installer-owned skills and foreign MCP servers are preserved. The default checkout is `~/.local/share/agent-backbone/library/`.
+- `name`, `path`: the package slug and its directory.
+- `claude_plugin`: deliver the package to Claude as one complete plugin.
+- `host_notes`: a file the agents are told to read before using the package.
+- `local_files`: files kept across upstream updates, such as host adapters.
+- `provenance_file`: a JSON file updated with the upstream repository, commit and tree.
+- `upstream`: `repository`, `path`, `ref`, `approved_tree`, `approved_commit`.
+- `skill_naming`: how upstream updates name shared skill links. `directory` (default) uses each skill's folder name; `frontmatter` uses the `name` in its `SKILL.md`.
+- `skill_prefix`: a prefix such as `"skill_prefix": "vendor"`. Updates name shared links `vendor-<skill>`, and delivery rewrites the frontmatter name the same way without changing source files.
 
-Shared instruction files are native single-file extras in append mode. Their dashboard entries point to canonical Git files. Generated extras named `agent-backbone-*` provide instruction bindings and package access policy; change their content sources or skill/target selection rather than editing generated bindings. Legacy Backbone instruction blocks migrate once to Skillshare blocks. Local text and instruction symlinks remain; a hand-edited Skillshare block is flagged and preserved.
+Full packages keep their licenses, scripts, references and adapters. `agents/`, `extras/` and `mcp.yaml` can hold portable shared definitions; credentials and OAuth state stay local. Existing installer-owned skills and foreign MCP servers are preserved.
+
+Disabled skills keep receiving approved source updates but are not delivered. Start a new agent session after changing the selection. Selection and target preferences are per machine, in `~/.config/agent-backbone/skillshare-control.yaml`; local ignore files are excluded from Git.
+
+Generated extras named `agent-backbone-*` bind the shared instructions and the package access policy. Change their content sources or the skill selection rather than editing them. Skillshare flags and preserves a hand-edited block.
+
+## Runtimes
+
+`runtimes.json` can pin an approved Argent version. Configure and refresh install it through Argent's own installer, then install its skills for the configured Claude, Codex and OpenCode targets. Argent owns its CLI skills and lockfile; they are not copied into the shared source. A local Argent change is reported, not reverted.
+
+Backbone sets Argent's `allowlist.enabled` to `false` when it is unset. This only stops `argent update` from rewriting editors' auto-approve lists, which Backbone and Git own.
+
+```sh
+agent-backbone runtime status
+agent-backbone runtime sync
+agent-backbone runtime pin argent VERSION   # records the version for review and publishing
+```
 
 ## Shared agent settings
 
-Put the settings every machine should share in `settings/` in the content repository: `claude.json` (Claude Code `settings.json`, including `enabledPlugins` and `extraKnownMarketplaces`), `codex.toml` (Codex `config.toml`), `opencode.json`, `grok.toml` and `cursor.json` (Cursor user settings). Each refresh writes exactly the listed keys into the agent's own file and leaves every other local key alone. Removing a key from Git removes it locally on the next refresh. Objects merge key by key; arrays and scalars replace. TOML files are edited line by line, so comments and unmanaged tables stay as they are. Claude plugins listed as enabled are installed when missing.
+Put the settings every machine should share in `settings/`:
 
-Keys that other owners manage are refused: Claude `hooks` and `mcpServers`, Codex `mcp_servers`, `hooks` and `projects`, OpenCode `mcp`, Grok `hooks`. Never put logins, tokens or machine-specific paths in these files; credentials and trust state stay on each machine.
+| File | Written to |
+|---|---|
+| `claude.json` | `~/.claude/settings.json`, including `enabledPlugins` and `extraKnownMarketplaces` |
+| `codex.toml` | `~/.codex/config.toml` |
+| `opencode.json` | `~/.config/opencode/opencode.jsonc`, or `opencode.json` |
+| `grok.toml` | `~/.grok/config.toml`, when `~/.grok` exists |
+| `cursor.json` | Cursor's user `settings.json`, when Cursor is installed |
 
-## Updates and safety
+Each refresh writes exactly the listed keys and leaves every other local key alone. Removing a key from Git removes it locally on the next refresh. Objects merge key by key; arrays and scalars replace. TOML files are edited line by line, so comments and unmanaged tables stay as they are.
 
-Upstream skill metadata accepts unquoted colons in plain `name` and `description` text. The same parser is used for validation, updates and prefixed delivery; other malformed YAML remains an error.
+Claude plugins listed as enabled are installed with `claude plugin install` when missing. Plugins ending in `@synced` are skipped: they come from the claude.ai account, and Claude syncs them itself.
 
-Refresh runs when an agent session starts: before supported agent launch, from Claude's and Codex's `SessionStart` hooks, from an OpenCode plugin (`~/.config/opencode/plugins/agent-backbone-refresh.js`) on startup and each new session, and from Cursor's `sessionStart` hook when Cursor is installed. Grok reads the Claude and Cursor hook files, so it refreshes too. There is no background timer; configure and refresh remove the launchd timer that earlier versions installed. Backbone also records Codex's trust hash for its own refresh hook in `~/.codex/config.toml`, so Codex runs it without asking; other hooks still need your approval. Codex needs `[features] hooks = true`. Standalone version/help probes bypass refresh so provider detection does not wait for Git or upstream checks. Dirty sources, divergence and network failures retain cached delivery and report the problem. Native dashboard edits apply locally, but must be reviewed, committed and pushed to reach other machines. Native ignore patterns, resource settings and copy mode survive refresh. Locally edited managed copies and generated package views are detected.
+Keys owned elsewhere are refused: Claude `hooks` and `mcpServers`; Codex `mcp_servers`, `hooks` and `projects`; OpenCode `mcp`; Grok `hooks`. Never put logins, tokens or machine-specific paths in these files.
+
+## Refresh and safety
+
+Refresh runs before a launcher starts an agent and from each agent's session-start hook. Version and help probes (`--version`, `-h` and similar) skip it. Codex needs `[features] hooks = true`; Backbone records the trust hash for its own refresh hook in `~/.codex/config.toml`, so Codex runs it without asking, while other hooks still need your approval.
+
+Dirty sources, divergence and network failures keep the cached delivery and report the problem. Dashboard edits apply locally; review, commit and push them to reach other machines. Native ignore patterns, resource settings and copy mode survive refresh. Locally edited managed copies and generated package views are detected and refused.
 
 ```sh
 agent-backbone status
@@ -69,32 +120,32 @@ skillshare audit --global --no-tui
 skillshare doctor
 ```
 
-Adoption copies the full skill and available provenance; it does not remove the installer's original. Review licenses, private content and duplicate registration before publishing. In CI, `upstream update --all --repository .` and `validate --repository .` work without configuring agents. Source updates do not publish automatically. Audits and sync do not execute skill scripts; audit findings need interpretation.
+`adopt` copies the full skill and any installer provenance; it does not remove the original. Review licenses, private content and duplicate registrations before publishing. Upstream updates stay local until you commit them. In CI, `upstream update --all --repository .` and `validate --repository .` work without configuring agents. Audits and sync do not run skill scripts.
 
-Run the dashboard through the managed launcher so package filtering stays active. `ui start` is unavailable; use a detached terminal instead: `tmux new-session -d -s agent-backbone-ui 'skillshare ui --no-open'`. The adapter binds to loopback. Remote sharing needs a private port forward/proxy that validates the remote Host and Origin. Dashboard status recognizes actual generated package contents without hiding foreign local skills or changed bodies.
+Run the dashboard through the managed launcher so package filtering stays active. `ui start` is refused; use a detached terminal instead: `tmux new-session -d -s agent-backbone-ui 'skillshare ui --no-open'`. The dashboard binds to loopback. Remote access needs a private port forward or proxy that validates the Host and Origin headers.
 
-Homebrew uninstall removes the tool, not content or state. Restore generated launchers/hooks/timers before uninstalling. State and backups are under `~/.local/state/agent-backbone/`. Claude/Codex instruction and launch integration are verified; other configured agent targets use native skill-directory delivery.
+## Files Backbone writes
+
+- `~/.local/bin/skillshare`, `~/.local/bin/<agent>` and `~/.local/bin/agent-backbone-refresh`
+- The refresh entry in `~/.claude/settings.json` and `~/.codex/hooks.json` (`SessionStart`) and `~/.cursor/hooks.json` (`sessionStart`)
+- `~/.config/opencode/plugins/agent-backbone-refresh.js`
+- The Codex hook trust record in `~/.codex/config.toml`
+- Configuration in `~/.config/agent-backbone/` and generated skill views in `~/.local/share/agent-backbone/active/`
+- State under `~/.local/state/agent-backbone/`, including the shared-settings ledger `settings-managed.json`
+
+Each configure, refresh, toggle and upstream update saves what it replaces in a new `backup-*`, `sync-backup-*`, `toggle-backup-*`, `native-backup-*` or `upstream-backup-*` directory under `~/.local/state/agent-backbone/`. The configure backup holds the original `skillshare` and agent executables.
+
+Homebrew uninstall removes the tool, not content or state. Before uninstalling, remove the launchers and hook entries above and restore the originals from the configure backup.
 
 ## Development
 
-Requires Node 22.16+ and a trusted Skillshare binary. Run `npm ci --ignore-scripts`, `npm run typecheck`, and `AGENT_BACKBONE_SKILLSHARE=/path/to/skillshare npm test`. Terminal tests require tmux; tests run the real engine and native HTTP dashboard.
+Requires Node 22.16+, tmux and a Skillshare binary. `scripts/download-engine.sh` downloads the pinned, checksum-verified release to `vendor/skillshare`.
 
-## Default targets
+```sh
+npm ci --ignore-scripts
+scripts/download-engine.sh
+npm run typecheck
+AGENT_BACKBONE_SKILLSHARE="$PWD/vendor/skillshare" npm test
+```
 
-New configurations target Claude, Codex and OpenCode. Override this with `--agents`. Shared instructions append to each agent's global instruction file and preserve local text. MCP operations and synchronization use the same persistent control configuration to avoid competing ownership records.
-
-Skillshare v0.25.11 runs unchanged. Its Targets row describes native Skillshare delivery; Claude plugin delivery is verified separately. It is bundled in Agent Backbone v0.7.0.
-
-A library can use `instructions[].mode: "symlink"` for one canonical global instruction file. Its native filenames all link to the same source; append mode remains available for libraries that preserve local instruction overlays. Linked instructions do not receive separate host-policy blocks, so the shared source must contain any required host guidance.
-
-`runtimes.json` supports an approved Argent version. `agent-backbone runtime status` reports drift; `runtime sync` applies the approved version through Argent’s installer. `runtime pin argent VERSION` records a local version choice for review and publishing. Normal configure/refresh applies the policy too. Runtime refresh also verifies Claude’s installed skill links and repairs renamed skills through the official installer. Argent owns its CLI skills and lockfile; they are not imported into the shared skill source. A local CLI change is reported rather than silently reverted.
-
-Packages may set `skill_prefix`, for example `"skill_prefix": "matt"`. Upstream updates retain the prefix on shared links; active delivery also prefixes the frontmatter name without changing upstream source files.
-
-### Iterating on tests
-
-`npm test` remains the full build-and-test gate. After `npm run build`, use
-`npm run test:built` to rerun the compiled suite without rebuilding unchanged
-source. For one case, use `node --test --test-name-pattern="case name"
-dist/tests/integration.js`. Rebuild after source edits; run `npm test` before
-delivery. Keep the existing `AGENT_BACKBONE_SKILLSHARE` environment setting.
+Tests run the real engine and its HTTP dashboard. After `npm run build`, `npm run test:built` reruns the compiled suite, and `node --test --test-name-pattern="case name" dist/tests/integration.js` runs one case. Rebuild after source edits.

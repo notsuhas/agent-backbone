@@ -112,7 +112,7 @@ test('adopts full assets and installer provenance without removing originals', t
   const pkg = manifestSchema.parse(json(path.join(f.repo, 'backbone.json'))).packages[0];
   assert.equal(pkg?.upstream?.repository, 'https://github.com/example/vendor.git'); assert.equal(pkg?.upstream?.path, 'skills/external');
   skill(path.join(f.home, '.codex/skills/external'), 'external', 'Different body');
-  assert.ok(z.object({ conflicting_instructions: z.array(z.string()) }).parse(JSON.parse(f.cli('inventory').stdout)).conflicting_instructions.includes('external'));
+  assert.ok(z.object({ conflicting_skills: z.array(z.string()) }).parse(JSON.parse(f.cli('inventory').stdout)).conflicting_skills.includes('external'));
 });
 test('remote commits refresh instructions and new skills', t => {
   const f = fixture(); t.after(f.cleanup); f.configure(); const writer = f.writer();
@@ -432,9 +432,10 @@ test('native hooks and extras persist without executing hooks or losing startup 
   assert.match(f.cli('hooks', 'list', '--json', '--global').stdout, /fixture/);
 });
 
-test('Codex trust hashes match Codex for a known hook', () => {
-  const expected = 'sha256:a01c7756e687aa8674f2a4d3f351d14ae65dd3b8ca19b619378b51afb7c30562';
-  assert.equal(codexHookTrustHash('session_start', "bash '/Users/notsuhas/.codex/herdr-agent-state.sh' session", 10), expected);
+test('Codex trust hashes cover the sorted compact hook identity', () => {
+  // Mirrors codex-rs hook_hash and version_for_toml.
+  const identity = '{"event_name":"session_start","hooks":[{"async":false,"command":"echo hello","timeout":10,"type":"command"}]}';
+  assert.equal(codexHookTrustHash('session_start', 'echo hello', 10), 'sha256:' + createHash('sha256').update(identity).digest('hex'));
 });
 test('every agent refreshes at session start and no background timer remains', t => {
   const f = fixture(); t.after(f.cleanup);

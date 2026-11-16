@@ -16,10 +16,7 @@ export function config(): Config {
   return configSchema.parse(readJSON(file));
 }
 export function previousConfig(): Config | undefined {
-  for (const file of [path.join(paths().directory, 'config.json'), path.join(paths().home, '.config/skill-backbone/host.json')]) {
-    if (exists(file)) return configSchema.parse(readJSON(file));
-  }
-  return;
+  return exists(path.join(paths().directory, 'config.json')) ? config() : undefined;
 }
 export function manifest(repo: string): Manifest {
   const data = manifestSchema.parse(readJSON(path.join(repo, 'backbone.json'), { schema_version: 1 }));
@@ -243,7 +240,7 @@ export async function apply(options: { repo: string; data: Manifest; agents: Age
   }
   fs.mkdirSync(backup, { recursive: true });
   const backupLink = (target: string) => fs.renameSync(target, path.join(backup, path.relative(home, target).replaceAll(path.sep, '__')));
-  for (const [target, source] of Object.entries(previous?.managed_links || {})) if (!(target in desired) && owned(target, previous)) backupLink(target);
+  for (const target of Object.keys(previous?.managed_links || {})) if (!(target in desired) && owned(target, previous)) backupLink(target);
   for (const name of pluginSkills) {
     const target = path.join(rootFor('claude'), name), source = sourceSkills(repo, data).get(name);
     if (source && isLink(target) && real(target) === real(source) && !(target in desired)) backupLink(target);
