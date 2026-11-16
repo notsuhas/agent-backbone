@@ -479,12 +479,18 @@ test('every agent refreshes at session start and no background timer remains', t
   assert.ok(read(path.join(f.home, '.codex/config.toml')).includes(trust));
   const plugin = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
   assert.ok(plugin.includes(JSON.stringify(helper)) && plugin.includes('session.created'));
+  const foreign = '[hooks.state.' + JSON.stringify(hooksFile + ':session_start:5:0') + ']\ntrusted_hash = "sha256:other"';
+  fs.appendFileSync(path.join(f.home, '.codex/config.toml'), '\n' + foreign + '\n');
   fs.writeFileSync(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: {} }));
   f.cli('sync');
+  const codexConfig = read(path.join(f.home, '.codex/config.toml'));
+  assert.ok(!codexConfig.includes(trust) && codexConfig.includes(foreign));
+  assert.ok(codexConfig.includes('[hooks.state.' + JSON.stringify(hooksFile + ':session_start:0:0') + ']\ntrusted_hash = ' + JSON.stringify(expected)));
   assert.equal(count(path.join(f.home, '.codex/hooks.json')), 1);
   assert.equal(fs.statSync(grokHook).mtimeMs, grokWritten);
   f.configure();
   assert.equal(read(path.join(f.home, '.codex/config.toml')).split('trusted_hash').length - 1, 2);
+  assert.ok(read(path.join(f.home, '.codex/config.toml')).includes(foreign));
   assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
   assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
   assert.ok(!fs.existsSync(path.join(f.home, 'Library/LaunchAgents')) || fs.readdirSync(path.join(f.home, 'Library/LaunchAgents')).length === 0);

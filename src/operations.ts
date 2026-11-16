@@ -74,7 +74,7 @@ async function sessionRefresh(current: Config) {
     hooks.SessionStart = sessions;
     document.hooks = hooks;
     saveIfChanged(target, document);
-    trustCodexHook(path.join(home, '.codex/config.toml'), target + ':session_start:' + (sessions.length - 1) + ':0', codexHookTrustHash('session_start', helper, hookTimeout));
+    trustCodexHook(path.join(home, '.codex/config.toml'), target, target + ':session_start:' + (sessions.length - 1) + ':0', codexHookTrustHash('session_start', helper, hookTimeout));
   }
   if (current.targets.includes('opencode')) {
     const file = path.join(home, '.config/opencode/plugins/agent-backbone-refresh.js');
@@ -110,9 +110,23 @@ export function codexHookTrustHash(event: string, command: string, timeout: numb
   const identity = { event_name: event, hooks: [{ type: 'command', command, timeout, async: false }] };
   return 'sha256:' + createHash('sha256').update(sortedJSON(identity)).digest('hex');
 }
-function trustCodexHook(file: string, key: string, hash: string) {
+// Drops trust records for Backbone's hook left at older positions in the same hooks.json; other hooks' records stay.
+function withoutStaleTrust(text: string, hooksFile: string, key: string, hash: string) {
+  const lines = text.split('\n'), kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const quoted = /^\[hooks\.state\.("(?:[^"\\]|\\.)*")\]\s*$/.exec(lines[i]!)?.[1], name = quoted ? z.string().parse(JSON.parse(quoted)) : '';
+    if (name && name !== key && name.startsWith(hooksFile + ':')) {
+      let end = i + 1;
+      while (end < lines.length && !lines[end]!.startsWith('[')) end++;
+      if (lines.slice(i + 1, end).some(line => /^trusted_hash\s*=\s*"([^"]*)"/.exec(line)?.[1] === hash)) { i = end - 1; continue; }
+    }
+    kept.push(lines[i]!);
+  }
+  return kept.length === lines.length ? text : kept.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+function trustCodexHook(file: string, hooksFile: string, key: string, hash: string) {
   const target = isLink(file) ? real(file) : file;
-  const text = exists(target) ? fs.readFileSync(target, 'utf8') : '';
+  const original = exists(target) ? fs.readFileSync(target, 'utf8') : '', text = withoutStaleTrust(original, hooksFile, key, hash);
   const header = '[hooks.state.' + JSON.stringify(key) + ']';
   const block = header + '\ntrusted_hash = ' + JSON.stringify(hash) + '\n';
   const lines = text.split('\n'), start = lines.indexOf(header);
@@ -124,7 +138,7 @@ function trustCodexHook(file: string, key: string, hash: string) {
     const body = lines.slice(start + 1, end).filter(line => line.trim() && !/^trusted_hash\s*=/.test(line));
     next = [...lines.slice(0, start), header, 'trusted_hash = ' + JSON.stringify(hash), ...body, '', ...lines.slice(end)].join('\n').replace(/\n{3,}/g, '\n\n');
   }
-  if (next !== text) { fs.mkdirSync(path.dirname(target), { recursive: true }); atomicWrite(target, next); }
+  if (next !== original) { fs.mkdirSync(path.dirname(target), { recursive: true }); atomicWrite(target, next); }
 }
 // Removes the 15-minute launchd timer that versions before 0.9 installed.
 async function removeTimer() {
