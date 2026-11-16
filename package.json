@@ -1,6 +1,6 @@
 {
   "name": "agent-backbone",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "description": "Keep coding agents' skills, MCP servers, hooks, instructions and settings in sync from one Git repository.",
   "license": "MIT",
   "repository": {
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "commander": "^14.0.1",
+    "jsonc-parser": "3.3.1",
     "smol-toml": "1.9.1",
     "yaml": "^2.9.1",
     "zod": "^4.1.12"

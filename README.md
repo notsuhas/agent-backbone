@@ -35,11 +35,11 @@ New configurations target Claude, Codex and OpenCode. Choose others with `--agen
 |---|---|---|---|
 | `claude` | `~/.claude/skills` | `~/.claude/CLAUDE.md` | `SessionStart` hook |
 | `codex` | `~/.agents/skills` | `~/.codex/AGENTS.md` | `SessionStart` hook |
-| `opencode` | `~/.config/opencode/skills` | `~/.config/opencode/AGENTS.md` | Plugin |
+| `opencode` | `~/.config/opencode/skills` | `~/.config/opencode/AGENTS.md` | Plugin (OpenCode 2 plugin API) |
 | `cursor` | `~/.cursor/skills` | none | `sessionStart` hook |
 | `gemini` | `~/.gemini/skills` | none | none |
 
-Every target with an executable on `PATH` at configure time also gets a launcher in `~/.local/bin` that refreshes before starting the original executable. Cursor's hook is installed whenever `~/.cursor` exists. Grok reads the Claude and Cursor hook files, so it refreshes too.
+Every target with an executable on `PATH` at configure time also gets a launcher in `~/.local/bin` that refreshes before starting the original executable. Cursor's hook is installed whenever `~/.cursor` exists. When `~/.grok` exists, Grok gets its own `SessionStart` hook file, `~/.grok/hooks/agent-backbone-refresh.json`, because it does not load the Claude or Cursor hooks.
 
 ## Content repository
 
@@ -97,11 +97,11 @@ Put the settings every machine should share in `settings/`:
 | `grok.toml` | `~/.grok/config.toml`, when `~/.grok` exists |
 | `cursor.json` | Cursor's user `settings.json`, when Cursor is installed |
 
-Each refresh writes exactly the listed keys and leaves every other local key alone. Removing a key from Git removes it locally on the next refresh. Objects merge key by key; arrays and scalars replace. TOML files are edited line by line, so comments and unmanaged tables stay as they are.
+Each refresh writes exactly the listed keys and leaves every other local key alone. Removing a key from Git removes it locally on the next refresh, and deleting a whole file removes every key it set. Objects merge key by key; arrays and scalars replace. JSON and JSONC files are edited key by key and TOML files line by line, so comments, formatting and unmanaged keys stay as they are. If a local TOML file sets a shared key through a dotted key (`features.hooks = true`) or an inline table, that file is skipped with a message; move the key under its `[table]` header. A file that cannot be parsed or edited is left untouched and reported, and the other files still update.
 
 Claude plugins listed as enabled are installed with `claude plugin install` when missing. Plugins ending in `@synced` are skipped: they come from the claude.ai account, and Claude syncs them itself.
 
-Keys owned elsewhere are refused: Claude `hooks` and `mcpServers`; Codex `mcp_servers`, `hooks` and `projects`; OpenCode `mcp`; Grok `hooks`. Never put logins, tokens or machine-specific paths in these files.
+Keys owned elsewhere are refused: Claude `hooks` and `mcpServers`; Codex `mcp_servers`, `hooks` and `projects`; OpenCode `mcp`; Grok `hooks` and `mcp_servers`. Never put logins, tokens or machine-specific paths in these files.
 
 ## Subagents
 
@@ -113,7 +113,7 @@ Put one Markdown file per subagent in `subagents/`, named after it, with `name` 
 
 ## Refresh and safety
 
-Refresh runs before a launcher starts an agent and from each agent's session-start hook. Version and help probes (`--version`, `-h` and similar) skip it. Codex needs `[features] hooks = true`; Backbone records the trust hash for its own refresh hook in `~/.codex/config.toml`, so Codex runs it without asking, while other hooks still need your approval.
+Refresh runs before a launcher starts an agent and from each agent's session-start hook. Version and help probes (`--version`, `-h` and similar) skip it. A startup refresh within 60 seconds of the last successful one is skipped, so a launcher and the session hook it leads to refresh once. Session hooks allow 120 seconds. Codex needs `[features] hooks = true`; Backbone records the trust hash for its own refresh hook in `~/.codex/config.toml`, so Codex runs it without asking, while other hooks still need your approval.
 
 Dirty sources, divergence and network failures keep the cached delivery and report the problem. Dashboard edits apply locally; review, commit and push them to reach other machines. Native ignore patterns, resource settings and copy mode survive refresh. Locally edited managed copies and generated package views are detected and refused.
 
@@ -136,7 +136,8 @@ Run the dashboard through the managed launcher so package filtering stays active
 
 - `~/.local/bin/skillshare`, `~/.local/bin/<agent>` and `~/.local/bin/agent-backbone-refresh`
 - The refresh entry in `~/.claude/settings.json` and `~/.codex/hooks.json` (`SessionStart`) and `~/.cursor/hooks.json` (`sessionStart`)
-- `~/.config/opencode/plugins/agent-backbone-refresh.js`
+- `~/.config/opencode/plugins/agent-backbone-refresh.js`, an OpenCode 2 plugin that waits up to 120 seconds for the startup refresh
+- `~/.grok/hooks/agent-backbone-refresh.json`, when `~/.grok` exists
 - The Codex hook trust record in `~/.codex/config.toml`
 - Configuration in `~/.config/agent-backbone/` and generated skill views in `~/.local/share/agent-backbone/active/`
 - Subagent files listed under Subagents

@@ -39,6 +39,8 @@ async function installIntegration(current: Config) {
   if (current.targets.includes('claude') && exists(settings)) fs.copyFileSync(isLink(settings) ? real(settings) : settings, path.join(current.backup, 'claude-settings.json'));
   await sessionRefresh(current);
 }
+// Session hooks get as long as a full refresh may take.
+const hookTimeout = 120;
 const sessionHookSchema = z.object({ hooks: z.array(z.object({ command: z.string().optional() }).passthrough()).optional() }).passthrough();
 function saveIfChanged(file: string, document: unknown) {
   const text = JSON.stringify(document, null, 2) + '\n';
@@ -61,27 +63,58 @@ async function sessionRefresh(current: Config) {
   if (current.targets.includes('claude')) {
     const file = path.join(home, '.claude/settings.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helper);
+    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper, timeout: hookTimeout }] }, helper);
     document.hooks = hooks;
     saveIfChanged(target, document);
   }
   if (current.targets.includes('codex')) {
     const file = path.join(home, '.codex/hooks.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    const sessions = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helper);
+    const sessions = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: hookTimeout }] }, helper);
     hooks.SessionStart = sessions;
     document.hooks = hooks;
     saveIfChanged(target, document);
-    trustCodexHook(path.join(home, '.codex/config.toml'), target + ':session_start:' + (sessions.length - 1) + ':0', codexHookTrustHash('session_start', helper, 30));
+    trustCodexHook(path.join(home, '.codex/config.toml'), target, target + ':session_start:' + (sessions.length - 1) + ':0', codexHookTrustHash('session_start', helper, hookTimeout));
   }
   if (current.targets.includes('opencode')) {
     const file = path.join(home, '.config/opencode/plugins/agent-backbone-refresh.js');
-    const text = '// Managed by Agent Backbone; configure and refresh overwrite this file.\n'
-      + '// Refreshes shared skills, instructions and MCP definitions when OpenCode starts and when a session is created.\n'
-      + 'import { spawn } from "node:child_process";\n\n'
-      + 'const HELPER = ' + JSON.stringify(helper) + ';\n'
-      + 'function refresh() {\n  try { spawn(HELPER, [], { detached: true, stdio: "ignore" }).unref(); } catch {}\n}\n\n'
-      + 'export const AgentBackboneRefresh = async () => {\n  refresh();\n  return {\n    event: async ({ event }) => {\n      if (event?.type === "session.created") refresh();\n    },\n  };\n};\n';
+    const text = `// Managed by Agent Backbone; configure and refresh overwrite this file.
+// Refreshes shared skills, instructions and MCP definitions when OpenCode starts and when a session is created.
+import { spawn } from "node:child_process";
+
+const HELPER = ${JSON.stringify(helper)};
+let running = false;
+// Resolves when the helper exits, fails to start, or after 120 seconds; skips while one is running.
+function refresh() {
+  if (running) return Promise.resolve();
+  running = true;
+  return new Promise((resolve) => {
+    const done = () => { running = false; clearTimeout(timer); resolve(); };
+    const timer = setTimeout(done, ${hookTimeout * 1000});
+    try {
+      const child = spawn(HELPER, [], { detached: true, stdio: "ignore" });
+      child.on("error", done);
+      child.on("exit", done);
+    } catch { done(); }
+  });
+}
+
+export default {
+  id: "agent-backbone-refresh",
+  async setup(ctx) {
+    await refresh();
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          if (event?.type === "session.created") void refresh();
+        }
+      } catch {}
+    })();
+    return () => controller.abort();
+  },
+};
+`;
     if (!exists(file) || fs.readFileSync(file, 'utf8') !== text) { fs.mkdirSync(path.dirname(file), { recursive: true }); atomicWrite(file, text); }
   }
   if (exists(path.join(home, '.cursor'))) {
@@ -92,6 +125,9 @@ async function sessionRefresh(current: Config) {
     document.hooks = hooks;
     document.version ??= 1;
     saveIfChanged(target, document);
+  }
+  if (exists(path.join(home, '.grok'))) {
+    saveIfChanged(path.join(home, '.grok/hooks/agent-backbone-refresh.json'), { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: helper, timeout: hookTimeout }] }] } });
   }
   await removeTimer();
 }
@@ -105,9 +141,23 @@ export function codexHookTrustHash(event: string, command: string, timeout: numb
   const identity = { event_name: event, hooks: [{ type: 'command', command, timeout, async: false }] };
   return 'sha256:' + createHash('sha256').update(sortedJSON(identity)).digest('hex');
 }
-function trustCodexHook(file: string, key: string, hash: string) {
+// Drops trust records for Backbone's hook left at older positions in the same hooks.json; other hooks' records stay.
+function withoutStaleTrust(text: string, hooksFile: string, key: string, hash: string) {
+  const lines = text.split('\n'), kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const quoted = /^\[hooks\.state\.("(?:[^"\\]|\\.)*")\]\s*$/.exec(lines[i]!)?.[1], name = quoted ? z.string().parse(JSON.parse(quoted)) : '';
+    if (name && name !== key && name.startsWith(hooksFile + ':')) {
+      let end = i + 1;
+      while (end < lines.length && !lines[end]!.startsWith('[')) end++;
+      if (lines.slice(i + 1, end).some(line => /^trusted_hash\s*=\s*"([^"]*)"/.exec(line)?.[1] === hash)) { i = end - 1; continue; }
+    }
+    kept.push(lines[i]!);
+  }
+  return kept.length === lines.length ? text : kept.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+function trustCodexHook(file: string, hooksFile: string, key: string, hash: string) {
   const target = isLink(file) ? real(file) : file;
-  const text = exists(target) ? fs.readFileSync(target, 'utf8') : '';
+  const original = exists(target) ? fs.readFileSync(target, 'utf8') : '', text = withoutStaleTrust(original, hooksFile, key, hash);
   const header = '[hooks.state.' + JSON.stringify(key) + ']';
   const block = header + '\ntrusted_hash = ' + JSON.stringify(hash) + '\n';
   const lines = text.split('\n'), start = lines.indexOf(header);
@@ -119,7 +169,7 @@ function trustCodexHook(file: string, key: string, hash: string) {
     const body = lines.slice(start + 1, end).filter(line => line.trim() && !/^trusted_hash\s*=/.test(line));
     next = [...lines.slice(0, start), header, 'trusted_hash = ' + JSON.stringify(hash), ...body, '', ...lines.slice(end)].join('\n').replace(/\n{3,}/g, '\n\n');
   }
-  if (next !== text) { fs.mkdirSync(path.dirname(target), { recursive: true }); atomicWrite(target, next); }
+  if (next !== original) { fs.mkdirSync(path.dirname(target), { recursive: true }); atomicWrite(target, next); }
 }
 // Removes the 15-minute launchd timer that versions before 0.9 installed.
 async function removeTimer() {
@@ -161,11 +211,13 @@ export async function configure(options: IConfigure) {
     await installIntegration(current);
     process.stdout.write('Configured ' + repo + ' for ' + agents.join(', ') + '. Backups: ' + backup + '\n');
   });
-  await sync(true);
+  await sync(true, false);
 }
-export async function sync(startup = false) {
+export async function sync(startup = false, reuseRecent = startup) {
   await locked(async () => {
     const current = config(), { state, directory } = paths(), health = healthSchema.parse(readJSON(path.join(state, 'status.json')));
+    // A launcher refreshes just before the agent's session hook does; the second one has nothing new to apply.
+    if (reuseRecent && health.last_success && Date.now() / 1000 - health.last_success < 60) return;
     health.last_attempt = Date.now() / 1000;
     try {
       if (await run(['git', 'status', '--porcelain'], current.repo)) throw new Error('Unpublished local edits; commit/push or stash them before refreshing.');
@@ -226,7 +278,8 @@ export function skills() {
 export async function status() {
   const current = config(), health = healthSchema.parse(readJSON(path.join(paths().state, 'status.json')));
   process.stdout.write('Agent Backbone ' + VERSION + '\nSource: ' + current.repo + '\nSync: ' + (health.status || 'unknown') + ' | revision ' + (health.revision || 'unknown').slice(0, 12) + '\nLocal edits: ' + (await run(['git', 'status', '--porcelain'], current.repo) ? 'pending' : 'none') + '\nTargets: ' + current.targets.join(', ') + '\nDisabled skills: ' + (current.disabled_skills.join(', ') || 'none') + '\n');
-  for (const [name, info] of Object.entries(checksSchema.parse(readJSON(path.join(paths().state, 'upstreams.json'))))) process.stdout.write('Upstream ' + name + ': ' + (info.status || 'unknown') + '\n');
+  const tracked = new Set(manifest(current.repo).packages.flatMap(pkg => pkg.upstream ? [pkg.name] : []));
+  for (const [name, info] of Object.entries(checksSchema.parse(readJSON(path.join(paths().state, 'upstreams.json')))).filter(([name]) => tracked.has(name))) process.stdout.write('Upstream ' + name + ': ' + (info.status || 'unknown') + '\n');
 }
 export function inventory() {
   const byName: Record<string, { agent: string; path: string; sha256: string; installer_source?: z.infer<typeof installerSchema>['skills'][string] }[]> = {}, visited = new Set<string>(), installed: z.infer<typeof installerSchema>['skills'] = {};

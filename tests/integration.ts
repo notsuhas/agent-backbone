@@ -9,6 +9,8 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { parse as parseYAML } from 'yaml';
+import { parse as parseJSONC } from 'jsonc-parser';
+import { parse as parseTOML } from 'smol-toml';
 import { configSchema, healthSchema, manifestSchema } from '../src/model.js';
 import { codexHookTrustHash } from '../src/operations.js';
 
@@ -52,7 +54,9 @@ function fixture() {
     data.packages.push({ name: 'demo', path: 'packages/demo', claude_plugin: true, host_notes: 'HOST.md', local_files: ['HOST.md', '.claude-plugin/plugin.json'] });
     write(path.join(repo, 'backbone.json'), JSON.stringify(data)); push(); return pkg;
   }
-  return { root, home, repo, remote, env, git, commit, exec, cli, cliFail, configure, writer, push, plugin, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  // Makes the last successful refresh old enough that startup refreshes run again.
+  function age() { const file = path.join(home, '.local/state/agent-backbone/status.json'); const status = healthSchema.parse(json(file)); write(file, JSON.stringify({ ...status, last_success: (status.last_success ?? 0) - 120 })); }
+  return { root, home, repo, remote, env, git, commit, exec, cli, cliFail, configure, writer, push, plugin, age, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test('agent information probes skip refresh while sessions receive upstream updates', t => {
@@ -70,6 +74,7 @@ test('agent information probes skip refresh while sessions receive upstream upda
       assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Version one/);
     }
   }
+  f.age();
   assert.equal(f.exec(opencode, ['run', 'hello']).stdout, 'original opencode run hello\n');
   assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Updated before session/);
 });
@@ -95,7 +100,7 @@ test('preflights foreign destinations without partial installs', t => {
   assert.equal(read(foreign), 'Foreign installer content\n'); assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/example')));
 });
 test('dirty or offline startup retains cached delivery', t => {
-  const f = fixture(); t.after(f.cleanup); f.configure();
+  const f = fixture(); t.after(f.cleanup); f.configure(); f.age();
   write(path.join(f.repo, 'instructions/global.md'), 'Unpublished local edit\n'); f.cli('sync', '--startup');
   const status = healthSchema.parse(json(path.join(f.home, '.local/state/agent-backbone/status.json')));
   assert.equal(status.status, 'stale'); assert.match(status.reason || '', /Unpublished/);
@@ -113,6 +118,18 @@ test('adopts full assets and installer provenance without removing originals', t
   assert.equal(pkg?.upstream?.repository, 'https://github.com/example/vendor.git'); assert.equal(pkg?.upstream?.path, 'skills/external');
   skill(path.join(f.home, '.codex/skills/external'), 'external', 'Different body');
   assert.ok(z.object({ conflicting_skills: z.array(z.string()) }).parse(JSON.parse(f.cli('inventory').stdout)).conflicting_skills.includes('external'));
+});
+test('status and refresh keep upstream checks only for packages in the manifest', t => {
+  const f = fixture(); t.after(f.cleanup); f.plugin();
+  const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
+  data.packages[0]!.upstream = { repository: 'https://github.com/example/none.git', path: '.', ref: 'main', approved_tree: 'abc' };
+  write(path.join(f.repo, 'backbone.json'), JSON.stringify(data)); f.push(); f.configure();
+  const checks = path.join(f.home, '.local/state/agent-backbone/upstreams.json');
+  write(checks, JSON.stringify({ demo: { checked_at: Date.now() / 1000, approved_tree: 'abc', latest_tree: 'abc', status: 'current' }, gone: { checked_at: 1, status: 'review_available' } }));
+  const output = f.cli('status').stdout;
+  assert.match(output, /Upstream demo: current/); assert.ok(!output.includes('gone'));
+  f.cli('sync');
+  assert.deepEqual(Object.keys(z.record(z.string(), z.unknown()).parse(json(checks))), ['demo']);
 });
 test('remote commits refresh instructions and new skills', t => {
   const f = fixture(); t.after(f.cleanup); f.configure(); const writer = f.writer();
@@ -432,6 +449,18 @@ test('native hooks and extras persist without executing hooks or losing startup 
   assert.match(f.cli('hooks', 'list', '--json', '--global').stdout, /fixture/);
 });
 
+test('a startup refresh right after a successful one is skipped and hooks allow a full refresh', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  const statusFile = path.join(f.home, '.local/state/agent-backbone/status.json'), before = read(statusFile);
+  const writer = f.writer(); write(path.join(writer, 'instructions/global.md'), 'Shared instruction v2\n'); f.push(writer);
+  f.cli('sync', '--startup');
+  assert.equal(read(statusFile), before); assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Shared instruction v1/);
+  f.age(); f.cli('sync', '--startup');
+  assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Shared instruction v2/);
+  const timeouts = (file: string) => [...read(file).matchAll(/"timeout": (\d+)/g)].map(match => match[1]);
+  assert.deepEqual(timeouts(path.join(f.home, '.claude/settings.json')), ['120']);
+  assert.deepEqual(timeouts(path.join(f.home, '.codex/hooks.json')), ['120']);
+});
 test('Codex trust hashes cover the sorted compact hook identity', () => {
   // Mirrors codex-rs hook_hash and version_for_toml.
   const identity = '{"event_name":"session_start","hooks":[{"async":false,"command":"echo hello","timeout":10,"type":"command"}]}';
@@ -442,9 +471,13 @@ test('every agent refreshes at session start and no background timer remains', t
   const legacy = path.join(f.home, 'Library/LaunchAgents/ai.agent-backbone.refresh.plist');
   write(legacy, '<plist/>\n');
   write(path.join(f.home, '.cursor/hooks.json'), JSON.stringify({ version: 1, hooks: { sessionStart: [{ command: 'echo keep' }] } }));
+  fs.mkdirSync(path.join(f.home, '.grok'));
   write(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo keep' }] }] } }));
   f.configure();
   const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
+  const grokHook = path.join(f.home, '.grok/hooks/agent-backbone-refresh.json');
+  assert.deepEqual(json(grokHook), { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: helper, timeout: 120 }] }] } });
+  const grokWritten = fs.statSync(grokHook).mtimeMs;
   const count = (file: string) => read(file).split(helper).length - 1;
   assert.ok(!fs.existsSync(legacy));
   assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
@@ -453,19 +486,49 @@ test('every agent refreshes at session start and no background timer remains', t
   assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
   assert.match(read(path.join(f.home, '.cursor/hooks.json')), /echo keep/);
   const hooksFile = path.join(f.home, '.codex/hooks.json');
-  const expected = 'sha256:' + createHash('sha256').update(JSON.stringify({ event_name: 'session_start', hooks: [{ async: false, command: helper, timeout: 30, type: 'command' }] })).digest('hex');
+  const expected = 'sha256:' + createHash('sha256').update(JSON.stringify({ event_name: 'session_start', hooks: [{ async: false, command: helper, timeout: 120, type: 'command' }] })).digest('hex');
   const trust = '[hooks.state.' + JSON.stringify(hooksFile + ':session_start:1:0') + ']\ntrusted_hash = ' + JSON.stringify(expected);
   assert.ok(read(path.join(f.home, '.codex/config.toml')).includes(trust));
   const plugin = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
-  assert.ok(plugin.includes(JSON.stringify(helper)) && plugin.includes('session.created'));
+  assert.ok(plugin.includes(JSON.stringify(helper)) && plugin.includes('session.created') && plugin.includes('export default') && plugin.includes('id: "agent-backbone-refresh"'));
+  const foreign = '[hooks.state.' + JSON.stringify(hooksFile + ':session_start:5:0') + ']\ntrusted_hash = "sha256:other"';
+  fs.appendFileSync(path.join(f.home, '.codex/config.toml'), '\n' + foreign + '\n');
   fs.writeFileSync(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: {} }));
   f.cli('sync');
+  const codexConfig = read(path.join(f.home, '.codex/config.toml'));
+  assert.ok(!codexConfig.includes(trust) && codexConfig.includes(foreign));
+  assert.ok(codexConfig.includes('[hooks.state.' + JSON.stringify(hooksFile + ':session_start:0:0') + ']\ntrusted_hash = ' + JSON.stringify(expected)));
   assert.equal(count(path.join(f.home, '.codex/hooks.json')), 1);
+  assert.equal(fs.statSync(grokHook).mtimeMs, grokWritten);
   f.configure();
   assert.equal(read(path.join(f.home, '.codex/config.toml')).split('trusted_hash').length - 1, 2);
+  assert.ok(read(path.join(f.home, '.codex/config.toml')).includes(foreign));
   assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
   assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
   assert.ok(!fs.existsSync(path.join(f.home, 'Library/LaunchAgents')) || fs.readdirSync(path.join(f.home, 'Library/LaunchAgents')).length === 0);
+});
+
+test('OpenCode plugin waits for the first refresh and tolerates a missing helper', async t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
+  const source = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
+  const marker = path.join(f.root, 'refreshes'), fake = path.join(f.root, 'fake-refresh');
+  write(fake, '#!/bin/sh\nsleep 1\necho run >> ' + JSON.stringify(marker) + '\n'); fs.chmodSync(fake, 0o755);
+  const load = async (target: string, name: string) => {
+    const file = path.join(f.root, name + '.mjs'); write(file, source.replace(JSON.stringify(helper), JSON.stringify(target)));
+    const loaded: { default: { id: string; setup: (context: unknown) => Promise<() => void> } } = await import(file);
+    return loaded.default;
+  };
+  const events = { event: { subscribe: async function* () { yield { type: 'session.created' }; yield { type: 'session.created' }; } } };
+  const plugin = await load(fake, 'present');
+  assert.equal(plugin.id, 'agent-backbone-refresh');
+  const stop = await plugin.setup(events);
+  assert.equal(read(marker), 'run\n');
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  assert.equal(read(marker), 'run\nrun\n');
+  stop();
+  const missing = await load(path.join(f.root, 'missing-helper'), 'missing');
+  (await missing.setup(events))();
 });
 
 test('shared settings from Git merge into every agent and leave local keys alone', t => {
@@ -473,7 +536,7 @@ test('shared settings from Git merge into every agent and leave local keys alone
   const cursorDir = process.platform === 'darwin' ? path.join(f.home, 'Library/Application Support/Cursor/User') : path.join(f.home, '.config/Cursor/User');
   write(path.join(f.home, '.claude/settings.json'), JSON.stringify({ theme: 'light', localOnly: 1, skillOverrides: { cloudflare: 'off' }, enabledPlugins: { 'local@x': true } }));
   write(path.join(f.home, '.codex/config.toml'), '# my comment\nmodel = "old"\nkeep = 1\n\n[projects."/tmp/p"]\ntrust_level = "trusted"\n\n[mcp_servers.local]\ncommand = "x"\n');
-  write(path.join(f.home, '.config/opencode/opencode.jsonc'), '{\n  // comment\n  "mcp": { "local": { "type": "local" } },\n  "plugin": ["old"],\n}\n');
+  write(path.join(f.home, '.config/opencode/opencode.jsonc'), '{\n  // comment\n  "mcp": { "local": { "type": "local" } },\n  /* block */ "note": "a, ]",\n  "plugin": ["old"],\n}\n');
   write(path.join(cursorDir, 'settings.json'), '{ "editor.fontSize": 12 }');
   write(path.join(f.repo, 'settings/claude.json'), JSON.stringify({ theme: 'dark', skillOverrides: {}, enabledPlugins: { 'shared@y': false }, statusLine: { type: 'command', command: 'echo hi' } }));
   write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\napproval_policy = "never"\n\n[features]\nhooks = true\n\n[apps."connector_1"]\nenabled = false\n');
@@ -490,8 +553,10 @@ test('shared settings from Git merge into every agent and leave local keys alone
   assert.match(codex, /\[mcp_servers\.local\]\ncommand = "x"/);
   assert.match(codex, /\[features\]\nhooks = true/);
   assert.match(codex, /\[apps\.connector_1\]\nenabled = false/);
-  const opencode = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.config/opencode/opencode.jsonc')));
-  assert.deepEqual(opencode.plugin, []); assert.deepEqual(opencode.tools, { 'argent*': true }); assert.deepEqual(opencode.mcp, { local: { type: 'local' } });
+  const opencodeText = read(path.join(f.home, '.config/opencode/opencode.jsonc'));
+  assert.ok(opencodeText.includes('  // comment\n  "mcp": { "local": { "type": "local" } },\n  /* block */ "note": "a, ]",\n'));
+  const opencode = z.record(z.string(), z.unknown()).parse(parseJSONC(opencodeText));
+  assert.equal(opencode.note, 'a, ]'); assert.deepEqual(opencode.plugin, []); assert.deepEqual(opencode.tools, { 'argent*': true }); assert.deepEqual(opencode.mcp, { local: { type: 'local' } });
   assert.deepEqual(json(path.join(cursorDir, 'settings.json')), { 'editor.fontSize': 12, 'window.commandCenter': true });
   write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\n\n[features]\nhooks = true\n');
   write(path.join(f.repo, 'settings/claude.json'), JSON.stringify({ theme: 'dark' }));
@@ -500,9 +565,57 @@ test('shared settings from Git merge into every agent and leave local keys alone
   assert.ok(!after.includes('approval_policy') && !after.includes('connector_1') && after.includes('keep = 1'));
   const claudeAfter = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.claude/settings.json')));
   assert.equal(claudeAfter.statusLine, undefined); assert.equal(claudeAfter.skillOverrides, undefined); assert.deepEqual(claudeAfter.enabledPlugins, { 'local@x': true });
+  fs.rmSync(path.join(f.repo, 'settings/codex.toml')); fs.rmSync(path.join(f.repo, 'settings/cursor.json')); f.push(); f.cli('sync');
+  const removed = read(path.join(f.home, '.codex/config.toml'));
+  assert.ok(!removed.includes('model = ') && !/^\[features\]/m.test(removed) && removed.includes('keep = 1'));
+  assert.deepEqual(json(path.join(cursorDir, 'settings.json')), { 'editor.fontSize': 12 });
+  const ledger = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.local/state/agent-backbone/settings-managed.json')));
+  assert.equal(ledger.codex, undefined); assert.equal(ledger.cursor, undefined); assert.ok(ledger.claude);
   f.cli('validate', '--repository', f.repo);
   write(path.join(f.repo, 'settings/codex.toml'), '[mcp_servers.bad]\ncommand = "x"\n');
   assert.match(f.cliFail('validate', '--repository', f.repo).stderr, /may not set mcp_servers/);
+  fs.rmSync(path.join(f.repo, 'settings/codex.toml')); write(path.join(f.repo, 'settings/grok.toml'), '[mcp_servers.bad]\ncommand = "x"\n');
+  assert.match(f.cliFail('validate', '--repository', f.repo).stderr, /grok\.toml may not set mcp_servers/);
+});
+
+test('a settings file that cannot be edited is reported and skipped while the refresh continues', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const grok = path.join(f.home, '.grok/config.toml'), opencode = path.join(f.home, '.config/opencode/opencode.jsonc');
+  write(grok, 'model = "local"\n[broken\n'); write(opencode, '{ broken');
+  write(path.join(f.repo, 'settings/grok.toml'), 'model = "shared"\n');
+  write(path.join(f.repo, 'settings/opencode.json'), JSON.stringify({ plugin: [] }));
+  write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\n');
+  const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
+  write(path.join(f.repo, 'backbone.json'), JSON.stringify({ ...data, refresh: ['touch "$HOME/refreshed"'] }));
+  f.push(); f.configure();
+  fs.rmSync(path.join(f.home, 'refreshed')); fs.rmSync(path.join(f.home, '.claude/settings.json'));
+  const result = f.cli('sync');
+  assert.match(result.stderr, new RegExp('Shared settings not applied to ' + grok.replaceAll('.', '\\.') + ': '));
+  assert.match(result.stderr, new RegExp('Shared settings not applied to ' + opencode.replaceAll('.', '\\.') + ': '));
+  assert.equal(read(grok), 'model = "local"\n[broken\n'); assert.equal(read(opencode), '{ broken');
+  assert.match(read(path.join(f.home, '.codex/config.toml')), /model = "new"/);
+  assert.ok(fs.existsSync(path.join(f.home, 'refreshed')));
+  assert.match(read(path.join(f.home, '.claude/settings.json')), /agent-backbone-refresh/);
+  assert.equal(healthSchema.parse(json(path.join(f.home, '.local/state/agent-backbone/status.json'))).status, 'current');
+});
+
+test('TOML settings replace whole multi-line values and refuse dotted keys and inline tables', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const codex = path.join(f.home, '.codex/config.toml'), grok = path.join(f.home, '.grok/config.toml');
+  const instructions = 'developer_instructions = """\nNotes\n[features]\nhooks = false\n"""\n';
+  write(codex, instructions + 'model = "old"\nallowed = [\n  "a",\n  "b",\n]\n\n[features]\nother = 1\n');
+  write(grok, 'features.hooks = false\n');
+  write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\nallowed = ["c"]\n\n[features]\nhooks = true\n');
+  write(path.join(f.repo, 'settings/grok.toml'), '[features]\nhooks = true\n');
+  f.push(); f.configure();
+  const text = read(codex), parsed = z.record(z.string(), z.unknown()).parse(parseTOML(text));
+  assert.ok(text.startsWith(instructions + 'model = "new"\nallowed = ["c"]\n\n[features]\nother = 1\nhooks = true\n'));
+  assert.equal(parsed.developer_instructions, 'Notes\n[features]\nhooks = false\n');
+  assert.match(f.cli('sync').stderr, /features\.hooks is set with a dotted key or inline table here/);
+  assert.equal(read(grok), 'features.hooks = false\n');
+  write(grok, 'features = { hooks = false }\n');
+  assert.match(f.cli('sync').stderr, /features\.hooks is set with a dotted key or inline table here/);
+  assert.equal(read(grok), 'features = { hooks = false }\n');
 });
 
 test('subagents reach every harness in its own format and refresh commands run', t => {

@@ -40,6 +40,7 @@ export async function upstreamCheck(data: Manifest, force = true, quiet = false)
     }
     if (!quiet || old?.status === 'review_available') (quiet ? process.stderr : process.stdout).write(pkg.name + ': ' + (old?.status || 'unknown') + (old?.check_status ? ' (latest check unavailable)' : '') + '\n');
   }
+  for (const name of Object.keys(cached)) if (!data.packages.some(pkg => pkg.name === name && pkg.upstream)) delete cached[name];
   saveJSON(file, cached);
 }
 async function updatePackage(repo: string, data: Manifest, pkg: Package) {
