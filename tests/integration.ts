@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { parse as parseYAML } from 'yaml';
 import { parse as parseJSONC } from 'jsonc-parser';
+import { parse as parseTOML } from 'smol-toml';
 import { configSchema, healthSchema, manifestSchema } from '../src/model.js';
 import { codexHookTrustHash } from '../src/operations.js';
 
@@ -527,6 +528,25 @@ test('a settings file that cannot be edited is reported and skipped while the re
   assert.ok(fs.existsSync(path.join(f.home, 'refreshed')));
   assert.match(read(path.join(f.home, '.claude/settings.json')), /agent-backbone-refresh/);
   assert.equal(healthSchema.parse(json(path.join(f.home, '.local/state/agent-backbone/status.json'))).status, 'current');
+});
+
+test('TOML settings replace whole multi-line values and refuse dotted keys and inline tables', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const codex = path.join(f.home, '.codex/config.toml'), grok = path.join(f.home, '.grok/config.toml');
+  const instructions = 'developer_instructions = """\nNotes\n[features]\nhooks = false\n"""\n';
+  write(codex, instructions + 'model = "old"\nallowed = [\n  "a",\n  "b",\n]\n\n[features]\nother = 1\n');
+  write(grok, 'features.hooks = false\n');
+  write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\nallowed = ["c"]\n\n[features]\nhooks = true\n');
+  write(path.join(f.repo, 'settings/grok.toml'), '[features]\nhooks = true\n');
+  f.push(); f.configure();
+  const text = read(codex), parsed = z.record(z.string(), z.unknown()).parse(parseTOML(text));
+  assert.ok(text.startsWith(instructions + 'model = "new"\nallowed = ["c"]\n\n[features]\nother = 1\nhooks = true\n'));
+  assert.equal(parsed.developer_instructions, 'Notes\n[features]\nhooks = false\n');
+  assert.match(f.cli('sync').stderr, /features\.hooks is set with a dotted key or inline table here/);
+  assert.equal(read(grok), 'features.hooks = false\n');
+  write(grok, 'features = { hooks = false }\n');
+  assert.match(f.cli('sync').stderr, /features\.hooks is set with a dotted key or inline table here/);
+  assert.equal(read(grok), 'features = { hooks = false }\n');
 });
 
 test('subagents reach every harness in its own format and refresh commands run', t => {

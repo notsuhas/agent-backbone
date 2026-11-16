@@ -93,39 +93,81 @@ function headerPath(line: string): string[] | undefined {
   }
   return parts;
 }
-function keyLine(line: string, key: string) {
-  const match = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*=/.exec(line);
-  if (!match) return false;
-  const raw = match[1]!;
-  return (raw.startsWith('"') ? JSON.parse(raw) : raw.startsWith("'") ? raw.slice(1, -1) : raw) === key;
+const segment = String.raw`"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+`;
+const assignment = new RegExp(String.raw`^\s*((?:${segment})(?:\s*\.\s*(?:${segment}))*)\s*=`);
+const unquote = (raw: string) => raw.startsWith('"') ? z.string().parse(JSON.parse(raw)) : raw.startsWith("'") ? raw.slice(1, -1) : raw;
+const startsWith = (list: string[], prefix: string[]) => prefix.length <= list.length && prefix.every((part, index) => list[index] === part);
+interface Entry { key: string[]; start: number; end: number }
+interface Section { path: string[]; start: number; end: number; entries: Entry[] }
+
+// Returns the line where the value starting at lines[start][offset] ends, following multi-line strings, arrays and inline tables.
+function valueEnd(lines: string[], start: number, offset: number) {
+  let depth = 0, quote = '';
+  for (let line = start; line < lines.length; line++) {
+    const text = lines[line]!;
+    for (let i = line === start ? offset : 0; i < text.length; i++) {
+      if (quote) {
+        if (quote[0] === '"' && text[i] === '\\') i++;
+        else if (text.startsWith(quote, i)) { i += quote.length - 1; quote = ''; }
+        continue;
+      }
+      const char = text[i]!;
+      if (char === '#') break;
+      if (text.startsWith('"""', i) || text.startsWith("'''", i)) { quote = text.slice(i, i + 3); i += 2; }
+      else if (char === '"' || char === "'") quote = char;
+      else if (char === '[' || char === '{') depth++;
+      else if (char === ']' || char === '}') depth--;
+    }
+    if (quote.length === 1) quote = '';
+    if (!quote && depth <= 0) return line;
+  }
+  return lines.length - 1;
+}
+// Lists tables and their keys, skipping the inside of multi-line values so they never look like headers or keys.
+function scan(lines: string[]) {
+  const sections: Section[] = [{ path: [], start: -1, end: lines.length, entries: [] }];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!, header = /^\s*\[\[/.test(line) ? ['\u0000array'] : headerPath(line);
+    if (header) { sections[sections.length - 1]!.end = i; sections.push({ path: header, start: i, end: lines.length, entries: [] }); continue; }
+    const match = assignment.exec(line);
+    if (!match) continue;
+    const end = valueEnd(lines, i, match[0].length);
+    sections[sections.length - 1]!.entries.push({ key: [...match[1]!.matchAll(new RegExp(segment, 'g'))].map(part => unquote(part[0])), start: i, end });
+    i = end;
+  }
+  return sections;
+}
+// A key that a dotted key or inline table already defines cannot get its own [table] line.
+function refuseOtherForms(sections: Section[], parts: string[]) {
+  const table = parts.slice(0, -1);
+  for (const section of sections) for (const entry of section.entries) {
+    const full = [...section.path, ...entry.key];
+    const inline = full.length < parts.length && startsWith(parts, full);
+    const dotted = entry.key.length > 1 && (id(full) === id(parts) || entry.key.slice(0, -1).some((_, index) => id([...section.path, ...entry.key.slice(0, index + 1)]) === id(table)));
+    if (inline || dotted) throw new Error(parts.join('.') + ' is set with a dotted key or inline table here; move it under a [' + table.map(tomlKey).join('.') + '] header to share it');
+  }
 }
 function editTOML(text: string, set: Leaf[], remove: string[][]) {
+  parseTOML(text);
   const lines = text.split('\n');
-  const sections = () => {
-    const found: { path: string[]; start: number; end: number }[] = [{ path: [], start: -1, end: lines.length }];
-    lines.forEach((line, index) => { if (/^\s*\[\[/.test(line)) { found[found.length - 1]!.end = index; found.push({ path: ['\u0000array'], start: index, end: lines.length }); return; }
-      const parts = headerPath(line); if (parts) { found[found.length - 1]!.end = index; found.push({ path: parts, start: index, end: lines.length }); } });
-    return found;
-  };
-  const locate = (table: string[], key: string) => {
-    const section = sections().find(entry => id(entry.path) === id(table));
-    if (!section) return { section: undefined, line: -1 };
-    for (let i = section.start + 1; i < section.end; i++) if (keyLine(lines[i]!, key)) return { section, line: i };
-    return { section, line: -1 };
+  const locate = (parts: string[]) => {
+    const sections = scan(lines), table = id(parts.slice(0, -1)), key = parts[parts.length - 1]!;
+    const section = sections.find(entry => id(entry.path) === table);
+    return { sections, section, entry: section?.entries.find(entry => entry.key.length === 1 && entry.key[0] === key) };
   };
   for (const parts of remove) {
-    const { section, line } = locate(parts.slice(0, -1), parts[parts.length - 1]!);
-    if (line < 0 || !section) continue;
-    lines.splice(line, 1);
-    // The section now ends one line earlier. Drop its header too once no keys remain.
-    const end = section.end - 1;
-    if (section.start >= 0 && lines.slice(section.start + 1, end).every(text => !text.trim())) lines.splice(section.start, end - section.start);
+    const { section, entry } = locate(parts);
+    if (!section || !entry) continue;
+    const count = entry.end - entry.start + 1, end = section.end - count;
+    lines.splice(entry.start, count);
+    // Drop the header too once no keys remain.
+    if (section.start >= 0 && lines.slice(section.start + 1, end).every(line => !line.trim())) lines.splice(section.start, end - section.start);
   }
   for (const leaf of set) {
-    const table = leaf.path.slice(0, -1), key = leaf.path[leaf.path.length - 1]!;
-    const text = tomlKey(key) + ' = ' + tomlValue(leaf.value);
-    const { section, line } = locate(table, key);
-    if (line >= 0) { if (/("""|''')/.test(lines[line]!)) throw new Error('Multi-line TOML values cannot be shared: ' + leaf.path.join('.')); lines[line] = text; continue; }
+    const table = leaf.path.slice(0, -1), text = tomlKey(leaf.path[leaf.path.length - 1]!) + ' = ' + tomlValue(leaf.value);
+    const { sections, section, entry } = locate(leaf.path);
+    if (entry) { lines.splice(entry.start, entry.end - entry.start + 1, text); continue; }
+    refuseOtherForms(sections, leaf.path);
     if (section) {
       let at = section.end; while (at > section.start + 1 && !lines[at - 1]!.trim()) at--;
       lines.splice(at, 0, text);
