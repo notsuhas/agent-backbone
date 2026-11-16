@@ -38,7 +38,7 @@ function fixture() {
   for (const agent of ['claude', 'codex']) { const file = path.join(home, '.local/bin', agent); write(file, '#!/bin/sh\nprintf "original ' + agent + ' %s\\n" "$*"\n'); fs.chmodSync(file, 0o755); }
   const cli = (...args: string[]) => exec(cliPath, args);
   const cliFail = (...args: string[]) => exec(cliPath, args, root, false);
-  function configure() { cli('configure', repo, '--no-background'); }
+  function configure() { cli('configure', repo); }
   function writer() { const dir = path.join(root, 'writer'); git(root, 'clone', remote, dir); return dir; }
   function push(dir = repo) { commit(dir); git(dir, 'push'); }
   function plugin() {
@@ -89,7 +89,7 @@ test('preserves shared instruction symlinks, assets, repeated configuration and 
 test('preflights foreign destinations without partial installs', t => {
   const f = fixture(); t.after(f.cleanup);
   const foreign = path.join(f.home, '.agents/skills/example/SKILL.md'); write(foreign, 'Foreign installer content\n');
-  assert.match(f.cliFail('configure', f.repo, '--no-background').stderr, /Unmanaged destination/);
+  assert.match(f.cliFail('configure', f.repo).stderr, /Unmanaged destination/);
   assert.equal(read(foreign), 'Foreign installer content\n'); assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/example')));
 });
 test('dirty or offline startup retains cached delivery', t => {
@@ -430,6 +430,32 @@ test('native hooks and extras persist without executing hooks or losing startup 
   assert.match(f.cli('hooks', 'list', '--json', '--global').stdout, /fixture/);
 });
 
+test('every agent refreshes at session start and no background timer remains', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const legacy = path.join(f.home, 'Library/LaunchAgents/ai.agent-backbone.refresh.plist');
+  write(legacy, '<plist/>\n');
+  write(path.join(f.home, '.cursor/hooks.json'), JSON.stringify({ version: 1, hooks: { sessionStart: [{ command: 'echo keep' }] } }));
+  write(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo keep' }] }] } }));
+  f.configure();
+  const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
+  const count = (file: string) => read(file).split(helper).length - 1;
+  assert.ok(!fs.existsSync(legacy));
+  assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
+  assert.equal(count(path.join(f.home, '.codex/hooks.json')), 1);
+  assert.match(read(path.join(f.home, '.codex/hooks.json')), /echo keep/);
+  assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
+  assert.match(read(path.join(f.home, '.cursor/hooks.json')), /echo keep/);
+  const plugin = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
+  assert.ok(plugin.includes(JSON.stringify(helper)) && plugin.includes('session.created'));
+  fs.writeFileSync(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: {} }));
+  f.cli('sync');
+  assert.equal(count(path.join(f.home, '.codex/hooks.json')), 1);
+  f.configure();
+  assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
+  assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
+  assert.ok(!fs.existsSync(path.join(f.home, 'Library/LaunchAgents')) || fs.readdirSync(path.join(f.home, 'Library/LaunchAgents')).length === 0);
+});
+
 test('migration removes generated plugin exclusions in modern Skillshare target syntax', t => {
   const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
   const control = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');
@@ -636,7 +662,7 @@ test('upstream updates preserve prefixed skills without replacing another packag
   assert.equal(fs.existsSync(path.join(f.repo, 'skills/new-skill')), false);
   assert.equal(manifestSchema.parse(json(path.join(f.repo, 'backbone.json'))).packages.find(pkg => pkg.name === 'vendor')?.skill_prefix, 'matt');
   f.cli('validate', '--repository', f.repo);
-  f.cli('configure', f.repo, '--agents', 'codex', '--no-background');
+  f.cli('configure', f.repo, '--agents', 'codex');
   assert.match(read(path.join(f.home, '.agents/skills/matt-tdd/SKILL.md')), /name: matt-tdd/);
   const delivered = read(path.join(f.home, '.agents/skills/matt-new-skill/SKILL.md'));
   assert.match(delivered, /name: matt-new-skill/);

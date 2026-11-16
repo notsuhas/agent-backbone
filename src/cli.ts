@@ -9,9 +9,8 @@ import { locked } from './files.js';
 import { runtimeStatus, pinArgent, syncRuntimes } from './runtimes.js';
 
 const cli = new Command().enablePositionalOptions().name('agent-backbone').description('Sync skills and shared agent instructions from any Git repository.').version('agent-backbone ' + VERSION);
-cli.command('configure <repository>').option('--destination <path>').option('--agents <agents>', 'agent targets', defaultTargets.join(',')).option('--interval <seconds>', 'refresh interval', value => Number(value), 900).option('--no-background').action(async (repository: string, options: { destination?: string; agents: string; interval: number; background: boolean }) => {
-  if (!Number.isInteger(options.interval) || options.interval < 60) throw new Error('Refresh interval must be at least 60 seconds.');
-  await configure({ repository, ...options, noBackground: !options.background });
+cli.command('configure <repository>').option('--destination <path>').option('--agents <agents>', 'agent targets', defaultTargets.join(',')).action(async (repository: string, options: { destination?: string; agents: string }) => {
+  await configure({ repository, ...options });
 });
 cli.command('sync').option('--startup').action(async (options: { startup?: boolean }) => sync(!!options.startup));
 cli.command('status').action(status);

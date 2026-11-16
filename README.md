@@ -19,7 +19,7 @@ Configure installs a `~/.local/bin/skillshare` launcher that runs the bundled na
 | Dashboard, terminal manager, ignore patterns, skill toggles and per-agent settings | Skillshare |
 | Skill/agent/MCP/hook/extra delivery and security audits | Skillshare |
 | Shared instruction blocks that preserve local content and symlinks | Skillshare single-file extras |
-| Session-start refresh and the macOS 15-minute timer | Backbone adapter |
+| Session-start refresh for Claude, Codex, OpenCode and Cursor | Backbone adapter |
 | Filter individual disabled skills inside complete plugins; preserve package assets and host notes | Backbone adapter |
 | Upstream provenance, adapter-preserving package updates and daily update PRs | Backbone updater and the content repository |
 
@@ -50,7 +50,7 @@ Shared instruction files are native single-file extras in append mode. Their das
 
 Upstream skill metadata accepts unquoted colons in plain `name` and `description` text. The same parser is used for validation, updates and prefixed delivery; other malformed YAML remains an error.
 
-Refresh runs before supported agent launch, on Claude startup/resume, and every 15 minutes on macOS. Standalone version/help probes bypass refresh so provider detection does not wait for Git or upstream checks. Linux uses launchers/hooks unless you add a timer. Dirty sources, divergence and network failures retain cached delivery and report the problem. Native dashboard edits apply locally, but must be reviewed, committed and pushed to reach other machines. Native ignore patterns, resource settings and copy mode survive refresh. Locally edited managed copies and generated package views are detected.
+Refresh runs when an agent session starts: before supported agent launch, from Claude's and Codex's `SessionStart` hooks, from an OpenCode plugin (`~/.config/opencode/plugins/agent-backbone-refresh.js`) on startup and each new session, and from Cursor's `sessionStart` hook when Cursor is installed. Grok reads the Claude and Cursor hook files, so it refreshes too. There is no background timer; configure and refresh remove the launchd timer that earlier versions installed. Codex asks you to trust a new hook once. Standalone version/help probes bypass refresh so provider detection does not wait for Git or upstream checks. Dirty sources, divergence and network failures retain cached delivery and report the problem. Native dashboard edits apply locally, but must be reviewed, committed and pushed to reach other machines. Native ignore patterns, resource settings and copy mode survive refresh. Locally edited managed copies and generated package views are detected.
 
 ```sh
 agent-backbone status
