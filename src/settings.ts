@@ -85,19 +85,11 @@ const segment = String.raw`"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+`;
 const header = new RegExp(String.raw`^\s*\[\s*((?:${segment})(?:\s*\.\s*(?:${segment}))*)\s*\]\s*(#.*)?$`);
 function headerPath(line: string): string[] | undefined {
   const match = header.exec(line);
-  if (!match) return undefined;
-  const parts: string[] = [], text = match[1]!.trim();
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] === '"') { let j = i + 1, value = ''; while (j < text.length && text[j] !== '"') { if (text[j] === '\\') j++; value += text[j]; j++; } parts.push(value); i = j + 1; }
-    else if (text[i] === "'") { const j = text.indexOf("'", i + 1); parts.push(text.slice(i + 1, j)); i = j + 1; }
-    else { let j = i; while (j < text.length && !/[.\s]/.test(text[j]!)) j++; parts.push(text.slice(i, j)); i = j; }
-    while (i < text.length && /[\s.]/.test(text[i]!)) i++;
-  }
-  return parts;
+  return match ? [...match[1]!.matchAll(new RegExp(segment, 'g'))].map(part => unquote(part[0])) : undefined;
 }
 const assignment = new RegExp(String.raw`^\s*((?:${segment})(?:\s*\.\s*(?:${segment}))*)\s*=`);
-const unquote = (raw: string) => raw.startsWith('"') ? z.string().parse(JSON.parse(raw)) : raw.startsWith("'") ? raw.slice(1, -1) : raw;
+// TOML's own parser decodes a quoted key, so escapes such as \t and \U0001F600 match the real key.
+const unquote = (raw: string) => raw.startsWith('"') ? z.string().parse(object.parse(parseTOML('k = ' + raw)).k) : raw.startsWith("'") ? raw.slice(1, -1) : raw;
 const startsWith = (list: string[], prefix: string[]) => prefix.length <= list.length && prefix.every((part, index) => list[index] === part);
 interface Entry { key: string[]; start: number; end: number }
 interface Section { path: string[]; start: number; end: number; entries: Entry[] }
@@ -151,7 +143,7 @@ function refuseOtherForms(sections: Section[], parts: string[]) {
 }
 function editTOML(text: string, set: Leaf[], remove: string[][]) {
   parseTOML(text);
-  const lines = text.split('\n');
+  const lines = text.split('\n'), retained: string[][] = [];
   const locate = (parts: string[]) => {
     const sections = scan(lines), table = id(parts.slice(0, -1)), key = parts[parts.length - 1]!;
     const section = sections.find(entry => id(entry.path) === table);
@@ -163,7 +155,10 @@ function editTOML(text: string, set: Leaf[], remove: string[][]) {
       // Still set in another form: keep it managed and say so, rather than leave it active forever.
       let value: unknown = parseTOML(lines.join('\n'));
       for (const part of parts) value = isObject(value) ? value[part] : undefined;
-      if (value !== undefined) throw new Error(parts.join('.') + ' is set with a dotted key or inline table here; move it under a [' + parts.slice(0, -1).map(tomlKey).join('.') + '] header so it can be removed');
+      if (value !== undefined) {
+        retained.push(parts);
+        process.stderr.write(parts.join('.') + ' is set with a dotted key or inline table here; move it under a [' + parts.slice(0, -1).map(tomlKey).join('.') + '] header so it can be removed\n');
+      }
       continue;
     }
     const count = entry.end - entry.start + 1, end = section.end - count;
@@ -187,7 +182,7 @@ function editTOML(text: string, set: Leaf[], remove: string[][]) {
   let result = lines.join('\n');
   if (!result.endsWith('\n')) result += '\n';
   parseTOML(result);
-  return result;
+  return { text: result, retained };
 }
 
 function readDesired(repo: string, target: Target): Leaf[] | undefined {
@@ -237,10 +232,11 @@ async function applyTarget(current: Config, target: Target, file: string | undef
   const stale = previous.filter(parts => !wanted.has(id(parts)));
   const destination = isLink(file) ? real(file) : file;
   const text = exists(destination) ? fs.readFileSync(destination, 'utf8') : '';
-  const result = target.format === 'json' ? editJSON(text, desired, stale, destination) : editTOML(text, desired, stale);
+  const edited = target.format === 'json' ? { text: editJSON(text, desired, stale, destination), retained: [] } : editTOML(text, desired, stale);
+  const result = edited.text;
   if (result !== text && (exists(destination) || desired.length)) atomicWrite(destination, result);
   if (target.agent === 'claude') await installClaudePlugins(current, desired);
-  return desired.map(leaf => leaf.path);
+  return [...desired.map(leaf => leaf.path), ...edited.retained];
 }
 
 // Claude plugins listed as enabled in settings/claude.json are installed when missing.

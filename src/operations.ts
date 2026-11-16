@@ -32,9 +32,6 @@ async function installIntegration(current: Config) {
     atomicWrite(file, '#!/bin/sh\nexec ' + quote(current.command) + ' launch ' + quote(agent) + ' -- "$@"\n');
     fs.chmodSync(file, 0o755);
   }
-  const helper = path.join(bin, 'agent-backbone-refresh');
-  atomicWrite(helper, '#!/bin/sh\nexec ' + quote(current.command) + ' sync --startup\n');
-  fs.chmodSync(helper, 0o755);
   const settings = path.join(home, '.claude/settings.json');
   if (current.targets.includes('claude') && exists(settings)) fs.copyFileSync(isLink(settings) ? real(settings) : settings, path.join(current.backup, 'claude-settings.json'));
   await sessionRefresh(current);
@@ -50,7 +47,7 @@ function saveIfChanged(file: string, document: unknown) {
 }
 function withRefresh(entries: unknown, entry: Record<string, unknown>, helper: string) {
   const sessions = z.array(sessionHookSchema).parse(entries || []);
-  return [...sessions.filter(item => !(item.hooks?.length === 1 && item.hooks[0]?.command === helper)), entry];
+  return [...sessions.filter(item => !(item.hooks?.length === 1 && [helper, helper + ' --from-claude'].includes(item.hooks[0]?.command || ''))), entry];
 }
 // Installs the session-start refresh hooks for each agent.
 // Commands listed under refresh in backbone.json run from the repository root after every refresh, in any harness.
@@ -59,11 +56,13 @@ async function runRefreshCommands(repo: string, commands: string[]) {
 }
 async function sessionRefresh(current: Config) {
   const { home } = paths(), helper = path.join(home, '.local/bin/agent-backbone-refresh');
+  atomicWrite(helper, '#!/bin/sh\nif [ "$1" = "--from-claude" ] && [ -n "$GROK_HOOK_EVENT" ]; then exit 0; fi\nexec ' + quote(current.command) + ' sync --startup\n');
+  fs.chmodSync(helper, 0o755);
   const object = z.record(z.string(), z.unknown());
   if (current.targets.includes('claude')) {
     const file = path.join(home, '.claude/settings.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper, timeout: hookTimeout }] }, helper);
+    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper + ' --from-claude', timeout: hookTimeout }] }, helper);
     document.hooks = hooks;
     saveIfChanged(target, document);
   }
@@ -314,7 +313,14 @@ function newestVersion(executable: string) {
   const resolved = exists(executable) ? real(executable) : executable, dir = path.dirname(resolved);
   const semver = /^\d+(\.\d+)+$/, order = (name: string) => name.split('.').map(Number);
   if (path.basename(dir) !== 'versions' || !semver.test(path.basename(resolved))) return executable;
-  const versions = fs.readdirSync(dir).filter(name => semver.test(name) && fs.statSync(path.join(dir, name)).isFile());
+  const versions = fs.readdirSync(dir).filter(name => {
+    if (!semver.test(name)) return false;
+    try {
+      const file = path.join(dir, name), stat = fs.statSync(file);
+      fs.accessSync(file, fs.constants.X_OK);
+      return stat.isFile() && stat.size > 0;
+    } catch { return false; }
+  });
   versions.sort((a, b) => { const x = order(a), y = order(b); for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0); return 0; });
   return path.join(dir, versions[versions.length - 1] ?? path.basename(resolved));
 }

@@ -81,7 +81,7 @@ function prefixedMetadata(content: string, prefix: string) {
   return '---\n' + stringify({ ...metadata, name: prefix + '-' + metadata.name }) + '---\n' + content.slice(header[0].length);
 }
 // Bump when the projection rules change, so existing views are rebuilt instead of reused.
-const projectionFormat = '2';
+const projectionFormat = '3';
 function projection(repo: string, data: Manifest, disabled: Set<string>) {
   const skills = sourceSkills(repo, data), activeSkills = new Map<string, string>(), packages = new Map<string, string>();
   const fingerprintsFile = path.join(paths().state, 'projections.json');
@@ -98,14 +98,30 @@ function projection(repo: string, data: Manifest, disabled: Set<string>) {
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.rmSync(pending, { recursive: true, force: true });
       fs.cpSync(source, pending, { recursive: true, verbatimSymlinks: true });
-      const enabledDirs = new Set(enabled.map(([, dir]) => real(dir)));
+      const enabledDirs = new Set(enabled.map(([, dir]) => real(dir))), references: string[] = [];
       for (const skillFile of walk(pending).filter(file => path.basename(file) === 'SKILL.md')) {
         const relative = path.relative(pending, path.dirname(skillFile));
-        // A disabled skill inside an enabled one is part of the parent's files: keep it there; its flattened name is excluded.
+        // Keep disabled nested skills as references without a discoverable SKILL.md filename.
         const parents = relative.split(path.sep).slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join(path.sep));
-        const kept = enabledDirs.has(real(path.join(source, relative))) || parents.some(parent => enabledDirs.has(real(path.join(source, parent))));
+        const active = enabledDirs.has(real(path.join(source, relative)));
+        const kept = active || parents.some(parent => enabledDirs.has(real(path.join(source, parent))));
         if (!kept) fs.rmSync(path.dirname(skillFile), { recursive: true, force: true });
+        else if (!active) {
+          const reference = path.join(path.dirname(skillFile), 'REFERENCE.md');
+          if (exists(reference)) throw new Error('Disabled reference filename already exists: ' + reference);
+          fs.renameSync(skillFile, reference);
+          references.push(skillFile);
+        }
         else if (pkg.skill_prefix) fs.writeFileSync(skillFile, prefixedMetadata(fs.readFileSync(skillFile, 'utf8'), pkg.skill_prefix));
+      }
+      for (const file of references.length ? walk(pending).filter(file => file.endsWith('.md')) : []) {
+        const before = fs.readFileSync(file, 'utf8');
+        let content = before;
+        for (const reference of references) {
+          const relative = path.relative(path.dirname(file), reference).split(path.sep).join('/');
+          content = content.replaceAll(relative, relative.replace(/SKILL\.md$/, 'REFERENCE.md'));
+        }
+        if (content !== before) fs.writeFileSync(file, content);
       }
       validateLinks(pending);
       fs.renameSync(pending, target);

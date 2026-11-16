@@ -509,6 +509,17 @@ test('every agent refreshes at session start and no background timer remains', t
   assert.ok(!fs.existsSync(path.join(f.home, 'Library/LaunchAgents')) || fs.readdirSync(path.join(f.home, 'Library/LaunchAgents')).length === 0);
 });
 
+test('Grok skips the Claude refresh import but keeps its native refresh', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
+  const writer = f.writer(); skill(path.join(writer, 'skills/example'), 'example', 'Grok refresh'); f.push(writer); f.age();
+  Object.assign(f.env, { GROK_HOOK_EVENT: 'SessionStart' });
+  f.exec(helper, ['--from-claude']);
+  assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Version one/);
+  f.exec(helper, []);
+  assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Grok refresh/);
+});
+
 test('OpenCode plugin waits for the first refresh and tolerates a missing helper', async t => {
   const f = fixture(); t.after(f.cleanup); f.configure();
   const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
@@ -636,6 +647,7 @@ test('a packaged parent keeps a disabled reference skill inside its own folder',
   const f = fixture(); t.after(f.cleanup);
   const pkg = path.join(f.repo, 'packages/kit');
   skill(path.join(pkg, 'parent'), 'parent'); skill(path.join(pkg, 'parent/refs/kept'), 'kept'); skill(path.join(pkg, 'parent/refs/dropped'), 'dropped');
+  write(path.join(pkg, 'parent/SKILL.md'), read(path.join(pkg, 'parent/SKILL.md')) + 'Read refs/dropped/SKILL.md\n');
   fs.symlinkSync('../packages/kit/parent', path.join(f.repo, 'skills/parent'), 'dir');
   for (const name of ['kept', 'dropped']) fs.symlinkSync('../packages/kit/parent/refs/' + name, path.join(f.repo, 'skills', name), 'dir');
   write(path.join(f.repo, 'skills/.skillignore'), 'dropped\nparent/refs/*\n');
@@ -644,8 +656,10 @@ test('a packaged parent keeps a disabled reference skill inside its own folder',
   write(path.join(f.repo, 'backbone.json'), JSON.stringify(data));
   f.push(); f.configure();
   for (const dir of ['.claude/skills', '.agents/skills']) {
-    assert.ok(fs.existsSync(path.join(f.home, dir, 'parent/refs/dropped/SKILL.md')), dir);
-    assert.ok(fs.existsSync(path.join(f.home, dir, 'kept/SKILL.md')), dir);
+    assert.ok(!fs.existsSync(path.join(f.home, dir, 'parent/refs/dropped/SKILL.md')), dir);
+    assert.match(read(path.join(f.home, dir, 'parent/SKILL.md')), /Read refs\/dropped\/REFERENCE\.md/);
+    assert.match(read(path.join(f.home, dir, 'parent/refs/dropped/REFERENCE.md')), /Version one/);
+    assert.match(read(path.join(f.home, dir, 'kept/SKILL.md')), /^---/);
     assert.ok(!fs.existsSync(path.join(f.home, dir, 'dropped')), dir);
     assert.ok(!fs.existsSync(path.join(f.home, dir, 'parent__refs__dropped')), dir);
   }
@@ -654,18 +668,20 @@ test('a packaged parent keeps a disabled reference skill inside its own folder',
 test('a removed TOML setting in another form stays managed until it can be removed', t => {
   const f = fixture(); t.after(f.cleanup);
   const codex = path.join(f.home, '.codex/config.toml'), ledger = path.join(f.home, '.local/state/agent-backbone/settings-managed.json');
-  write(path.join(f.repo, 'settings/codex.toml'), '[features]\nhooks = true\n');
+  write(path.join(f.repo, 'settings/codex.toml'), 'old = true\n[features]\nhooks = true\n');
   f.push(); f.configure();
   write(codex, 'features.hooks = true\n' + read(codex).replace('[features]\nhooks = true\n', ''));
-  fs.unlinkSync(path.join(f.repo, 'settings/codex.toml')); f.push(); f.age();
+  write(path.join(f.repo, 'settings/codex.toml'), 'model = "updated"\n'); f.push(); f.age();
   assert.match(f.cli('sync').stderr, /features\.hooks is set with a dotted key or inline table here/);
   assert.match(read(codex), /features\.hooks = true/);
+  assert.equal(parseTOML(read(codex)).model, 'updated');
+  assert.equal(parseTOML(read(codex)).old, undefined);
   const managed = () => z.record(z.string(), z.unknown()).parse(json(ledger)).codex;
-  assert.deepEqual(managed(), [['features', 'hooks']]);
+  assert.deepEqual(managed(), [['model'], ['features', 'hooks']]);
   write(codex, read(codex).replace('features.hooks = true\n', '') + '[features]\nhooks = true\n'); f.age();
   f.cli('sync');
   assert.doesNotMatch(read(codex), /features/);
-  assert.equal(managed(), undefined);
+  assert.deepEqual(managed(), [['model']]);
 });
 
 test('a native agent registered by version launches the newest installed version', t => {
@@ -674,6 +690,9 @@ test('a native agent registered by version launches the newest installed version
   for (const version of ['2.1.9', '2.1.10']) { write(path.join(versions, version), '#!/bin/sh\nprintf "claude ' + version + '\\n"\n'); fs.chmodSync(path.join(versions, version), 0o755); }
   fs.rmSync(path.join(f.home, '.local/bin/claude')); fs.symlinkSync(path.join(versions, '2.1.9'), path.join(f.home, '.local/bin/claude'));
   f.configure();
+  write(path.join(versions, '2.1.11'), ''); fs.chmodSync(path.join(versions, '2.1.11'), 0o755);
+  write(path.join(versions, '2.1.12'), 'unfinished'); fs.chmodSync(path.join(versions, '2.1.12'), 0o644);
+  fs.symlinkSync(path.join(versions, 'missing'), path.join(versions, '2.1.13'));
   assert.equal(f.exec(path.join(f.home, '.local/bin/claude'), ['--version']).stdout, 'claude 2.1.10\n');
 });
 
@@ -686,6 +705,16 @@ test('TOML headers with brackets inside quoted keys keep keys in their own table
   const parsed = z.record(z.string(), z.unknown()).parse(parseTOML(read(codex)));
   assert.equal(JSON.stringify(parsed.desktop), '{"x":1,"y":true}');
   assert.equal(JSON.stringify(parsed.projects), '{"/p/[w]":{"trust_level":"trusted"}}');
+});
+
+test('TOML header escapes are decoded before matching tables', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const codex = path.join(f.home, '.codex/config.toml');
+  write(codex, '[desktop."a\\tb"]\nx = 1\n\n[desktop.atb]\nx = 9\n\n[desktop."\\u00e9"]\nz = 1\n');
+  write(path.join(f.repo, 'settings/codex.toml'), '[desktop.atb]\nx = 2\n\n[desktop."é"]\ny = true\n');
+  f.push(); f.configure();
+  const parsed = z.record(z.string(), z.unknown()).parse(parseTOML(read(codex)));
+  assert.equal(JSON.stringify(parsed.desktop), JSON.stringify({ 'a\tb': { x: 1 }, atb: { x: 2 }, 'é': { z: 1, y: true } }));
 });
 
 test('subagents reach every harness in its own format and refresh commands run', t => {
