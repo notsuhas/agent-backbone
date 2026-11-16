@@ -505,6 +505,27 @@ test('shared settings from Git merge into every agent and leave local keys alone
   assert.match(f.cliFail('validate', '--repository', f.repo).stderr, /may not set mcp_servers/);
 });
 
+test('a settings file that cannot be edited is reported and skipped while the refresh continues', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const grok = path.join(f.home, '.grok/config.toml'), opencode = path.join(f.home, '.config/opencode/opencode.jsonc');
+  write(grok, 'model = "local"\n[broken\n'); write(opencode, '{ broken');
+  write(path.join(f.repo, 'settings/grok.toml'), 'model = "shared"\n');
+  write(path.join(f.repo, 'settings/opencode.json'), JSON.stringify({ plugin: [] }));
+  write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\n');
+  const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
+  write(path.join(f.repo, 'backbone.json'), JSON.stringify({ ...data, refresh: ['touch "$HOME/refreshed"'] }));
+  f.push(); f.configure();
+  fs.rmSync(path.join(f.home, 'refreshed')); fs.rmSync(path.join(f.home, '.claude/settings.json'));
+  const result = f.cli('sync');
+  assert.match(result.stderr, new RegExp('Shared settings not applied to ' + grok.replaceAll('.', '\\.') + ': '));
+  assert.match(result.stderr, new RegExp('Shared settings not applied to ' + opencode.replaceAll('.', '\\.') + ': '));
+  assert.equal(read(grok), 'model = "local"\n[broken\n'); assert.equal(read(opencode), '{ broken');
+  assert.match(read(path.join(f.home, '.codex/config.toml')), /model = "new"/);
+  assert.ok(fs.existsSync(path.join(f.home, 'refreshed')));
+  assert.match(read(path.join(f.home, '.claude/settings.json')), /agent-backbone-refresh/);
+  assert.equal(healthSchema.parse(json(path.join(f.home, '.local/state/agent-backbone/status.json'))).status, 'current');
+});
+
 test('subagents reach every harness in its own format and refresh commands run', t => {
   const f = fixture(); t.after(f.cleanup);
   fs.mkdirSync(path.join(f.home, '.cursor'), { recursive: true }); fs.mkdirSync(path.join(f.home, '.grok'), { recursive: true });

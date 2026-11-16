@@ -153,25 +153,38 @@ export async function applySettings(current: Config) {
   const ledger = z.record(z.string(), z.array(z.array(z.string()))).parse(readJSON(ledgerFile));
   const next: Record<string, string[][]> = {};
   for (const target of targets()) {
-    const desired = readDesired(current.repo, target), file = target.file();
-    if (!desired || !file) { if (ledger[target.agent]) next[target.agent] = ledger[target.agent]!; continue; }
-    const wanted = new Set(desired.map(leaf => id(leaf.path)));
-    const stale = (ledger[target.agent] || []).filter(parts => !wanted.has(id(parts)));
-    const destination = isLink(file) ? real(file) : file;
-    if (target.format === 'json') {
-      const document = readSettingsJSON(destination), before = JSON.stringify(document);
-      for (const parts of stale) deleteJSON(document, parts);
-      for (const leaf of desired) setJSON(document, leaf.path, leaf.value);
-      if (JSON.stringify(document) !== before || !exists(destination)) { fs.mkdirSync(path.dirname(destination), { recursive: true }); saveJSON(destination, document); }
-    } else {
-      const text = exists(destination) ? fs.readFileSync(destination, 'utf8') : '';
-      const result = editTOML(text, desired, stale);
-      if (result !== text) { fs.mkdirSync(path.dirname(destination), { recursive: true }); atomicWrite(destination, result); }
+    const file = target.file();
+    try {
+      const desired = await applyTarget(current, target, file, ledger[target.agent] || []);
+      if (desired) next[target.agent] = desired;
+      else if (ledger[target.agent]) next[target.agent] = ledger[target.agent]!;
+    } catch (error) {
+      process.stderr.write('Shared settings not applied to ' + (file || target.agent) + ': ' + (error instanceof Error ? error.message : String(error)) + '\n');
+      if (ledger[target.agent]) next[target.agent] = ledger[target.agent]!;
     }
-    next[target.agent] = desired.map(leaf => leaf.path);
-    if (target.agent === 'claude') await installClaudePlugins(current, desired);
   }
   saveJSON(ledgerFile, next);
+}
+
+// Returns the managed key paths, or undefined when the target has nothing to manage.
+async function applyTarget(current: Config, target: Target, file: string | undefined, previous: string[][]) {
+  const desired = readDesired(current.repo, target);
+  if (!desired || !file) return undefined;
+  const wanted = new Set(desired.map(leaf => id(leaf.path)));
+  const stale = previous.filter(parts => !wanted.has(id(parts)));
+  const destination = isLink(file) ? real(file) : file;
+  if (target.format === 'json') {
+    const document = readSettingsJSON(destination), before = JSON.stringify(document);
+    for (const parts of stale) deleteJSON(document, parts);
+    for (const leaf of desired) setJSON(document, leaf.path, leaf.value);
+    if (JSON.stringify(document) !== before || !exists(destination)) { fs.mkdirSync(path.dirname(destination), { recursive: true }); saveJSON(destination, document); }
+  } else {
+    const text = exists(destination) ? fs.readFileSync(destination, 'utf8') : '';
+    const result = editTOML(text, desired, stale);
+    if (result !== text) { fs.mkdirSync(path.dirname(destination), { recursive: true }); atomicWrite(destination, result); }
+  }
+  if (target.agent === 'claude') await installClaudePlugins(current, desired);
+  return desired.map(leaf => leaf.path);
 }
 
 // Claude plugins listed as enabled in settings/claude.json are installed when missing.
