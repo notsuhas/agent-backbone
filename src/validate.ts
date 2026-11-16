@@ -1,3 +1,4 @@
+import { validateSettings } from './settings.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseSkillFrontmatter } from './frontmatter.js';
@@ -17,5 +18,6 @@ export function validate(repo: string) {
     if (names.has(name)) throw new Error('Duplicate skill metadata name: ' + name);
     names.add(name);
   }
-  process.stdout.write('Validated ' + skills.size + ' skills and ' + data.packages.length + ' packages.\n');
+  const settings = validateSettings(repo);
+  process.stdout.write('Validated ' + skills.size + ' skills, ' + data.packages.length + ' packages and ' + settings + ' shared settings.\n');
 }

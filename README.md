@@ -46,6 +46,12 @@ Selection and target preferences are per machine, in `~/.config/agent-backbone/s
 
 Shared instruction files are native single-file extras in append mode. Their dashboard entries point to canonical Git files. Generated extras named `agent-backbone-*` provide instruction bindings and package access policy; change their content sources or skill/target selection rather than editing generated bindings. Legacy Backbone instruction blocks migrate once to Skillshare blocks. Local text and instruction symlinks remain; a hand-edited Skillshare block is flagged and preserved.
 
+## Shared agent settings
+
+Put the settings every machine should share in `settings/` in the content repository: `claude.json` (Claude Code `settings.json`, including `enabledPlugins` and `extraKnownMarketplaces`), `codex.toml` (Codex `config.toml`), `opencode.json`, `grok.toml` and `cursor.json` (Cursor user settings). Each refresh writes exactly the listed keys into the agent's own file and leaves every other local key alone. Removing a key from Git removes it locally on the next refresh. Objects merge key by key; arrays and scalars replace. TOML files are edited line by line, so comments and unmanaged tables stay as they are. Claude plugins listed as enabled are installed when missing.
+
+Keys that other owners manage are refused: Claude `hooks` and `mcpServers`, Codex `mcp_servers`, `hooks` and `projects`, OpenCode `mcp`, Grok `hooks`. Never put logins, tokens or machine-specific paths in these files; credentials and trust state stay on each machine.
+
 ## Updates and safety
 
 Upstream skill metadata accepts unquoted colons in plain `name` and `description` text. The same parser is used for validation, updates and prefixed delivery; other malformed YAML remains an error.
