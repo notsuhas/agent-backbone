@@ -45,27 +45,25 @@ function saveIfChanged(file: string, document: unknown) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   atomicWrite(file, text);
 }
-function withRefresh(entries: unknown, entry: Record<string, unknown>, helpers: string[]) {
+function withRefresh(entries: unknown, entry: Record<string, unknown>, helper: string) {
   const sessions = z.array(sessionHookSchema).parse(entries || []);
-  return [...sessions.filter(item => !(item.hooks?.length === 1 && helpers.includes(item.hooks[0]?.command || ''))), entry];
+  return [...sessions.filter(item => !(item.hooks?.length === 1 && item.hooks[0]?.command === helper)), entry];
 }
-// Refresh runs when an agent session starts: Claude and Codex SessionStart hooks, an OpenCode plugin,
-// and Cursor's sessionStart hook (Grok also reads the Claude and Cursor hook files). No background timer.
-export async function sessionRefresh(current: Config) {
-  const { home } = paths(), bin = path.join(home, '.local/bin');
-  const helper = path.join(bin, 'agent-backbone-refresh'), helpers = [helper, path.join(bin, 'skill-backbone-refresh')];
+// Installs the session-start refresh hooks for each agent.
+async function sessionRefresh(current: Config) {
+  const { home } = paths(), helper = path.join(home, '.local/bin/agent-backbone-refresh');
   const object = z.record(z.string(), z.unknown());
   if (current.targets.includes('claude')) {
     const file = path.join(home, '.claude/settings.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helpers);
+    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helper);
     document.hooks = hooks;
     saveIfChanged(target, document);
   }
   if (current.targets.includes('codex')) {
     const file = path.join(home, '.codex/hooks.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    const sessions = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helpers);
+    const sessions = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helper);
     hooks.SessionStart = sessions;
     document.hooks = hooks;
     saveIfChanged(target, document);
@@ -85,16 +83,14 @@ export async function sessionRefresh(current: Config) {
     const file = path.join(home, '.cursor/hooks.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
     const sessions = z.array(z.object({ command: z.string().optional() }).passthrough()).parse(hooks.sessionStart || []);
-    hooks.sessionStart = [...sessions.filter(item => !helpers.includes(item.command || '')), { command: helper }];
+    hooks.sessionStart = [...sessions.filter(item => item.command !== helper), { command: helper }];
     document.hooks = hooks;
     document.version ??= 1;
     saveIfChanged(target, document);
   }
   await removeTimer();
 }
-// Codex runs a user hook only after it is trusted: config.toml stores, per hook position, the SHA-256 of the
-// hook's identity as sorted compact JSON (codex-rs hooks discovery: hook_hash + version_for_toml). Recording
-// that hash for Backbone's own refresh hook means Codex never asks; any other hook still needs your approval.
+// Codex trusts a hook whose SHA-256 of sorted compact JSON identity is in config.toml (codex-rs hook_hash, version_for_toml).
 function sortedJSON(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(sortedJSON).join(',') + ']';
   if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + sortedJSON((value as Record<string, unknown>)[key])).join(',') + '}';
@@ -120,15 +116,12 @@ function trustCodexHook(file: string, key: string, hash: string) {
   }
   if (next !== text) { fs.mkdirSync(path.dirname(target), { recursive: true }); atomicWrite(target, next); }
 }
-// Earlier versions installed a launchd timer that refreshed every 15 minutes. Remove it wherever it remains.
+// Removes the 15-minute launchd timer that versions before 0.9 installed.
 async function removeTimer() {
-  const { home } = paths();
-  for (const label of ['ai.agent-backbone.refresh', 'ai.skill-backbone.refresh']) {
-    const plist = path.join(home, 'Library/LaunchAgents', label + '.plist');
-    if (!exists(plist)) continue;
-    if (process.platform === 'darwin') await run(['launchctl', 'bootout', 'gui/' + process.getuid?.() + '/' + label]).catch(() => {});
-    fs.rmSync(plist, { force: true });
-  }
+  const label = 'ai.agent-backbone.refresh', plist = path.join(paths().home, 'Library/LaunchAgents', label + '.plist');
+  if (!exists(plist)) return;
+  if (process.platform === 'darwin') await run(['launchctl', 'bootout', 'gui/' + process.getuid?.() + '/' + label]).catch(() => {});
+  fs.rmSync(plist, { force: true });
 }
 export async function configure(options: IConfigure) {
   await locked(async () => {
@@ -182,7 +175,7 @@ export async function sync(startup = false) {
       await applySettings(current);
       await sessionRefresh(current);
       health.status = 'current'; health.reason = null; health.last_success = Date.now() / 1000;
-      await upstreamCheck(current.repo, data, false, true);
+      await upstreamCheck(data, false, true);
     } catch (error) {
       health.status = 'stale'; health.reason = error instanceof Error ? error.message : String(error);
       process.stderr.write('Agent setup refresh failed; cached files retained: ' + health.reason + '\n');
@@ -202,7 +195,7 @@ export async function reconcileEngine() {
     saveJSON(path.join(paths().directory, 'config.json'), current);
   });
 }
-export async function setSkillSelection(changes: ReadonlyMap<string, boolean>) {
+async function setSkillSelection(changes: ReadonlyMap<string, boolean>) {
   if (!changes.size) return;
   await locked(async () => {
     const current = config(), data = manifest(current.repo), skills = sourceSkills(current.repo, data);
@@ -255,7 +248,7 @@ export async function launch(agent: Agent, args: string[]) {
   if (!informationOnly) await sync(true);
   execute(executable, forwarded);
 }
-export function execute(executable: string, args: string[]): never {
+function execute(executable: string, args: string[]): never {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
   if (!process.execve) throw new Error('Node 22.16 or newer is required for agent launch integration.');

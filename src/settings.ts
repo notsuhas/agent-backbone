@@ -5,10 +5,7 @@ import { z } from 'zod';
 import { exists, isLink, real, readJSON, saveJSON, atomicWrite, paths, run } from './files.js';
 import type { Config } from './model.js';
 
-// Shared agent settings live in the content repository under settings/. Each file lists the keys every machine
-// should have; refresh writes exactly those keys into the agent's own settings file and leaves every other local
-// key alone. Keys that were written earlier but are no longer listed are removed. Logins, tokens, project trust
-// and anything other tools own (hooks, MCP servers) are refused so they never travel through Git.
+// Writes the keys listed in the content repository's settings/ into each agent's settings file; see README.
 type Leaf = { path: string[]; value: unknown };
 type Format = 'json' | 'toml';
 interface Target { agent: string; source: string; format: Format; file: () => string | undefined; reserved: string[][] }
@@ -30,7 +27,7 @@ function targets(): Target[] {
 }
 
 // Objects are walked into their keys; scalars, arrays and empty objects are leaves.
-export function leaves(value: unknown, prefix: string[] = []): Leaf[] {
+function leaves(value: unknown, prefix: string[] = []): Leaf[] {
   if (isObject(value) && Object.keys(value).length) return Object.entries(value).flatMap(([key, child]) => leaves(child, [...prefix, key]));
   return [{ path: prefix, value }];
 }
@@ -90,7 +87,7 @@ function keyLine(line: string, key: string) {
   const raw = match[1]!;
   return (raw.startsWith('"') ? JSON.parse(raw) : raw.startsWith("'") ? raw.slice(1, -1) : raw) === key;
 }
-export function editTOML(text: string, set: Leaf[], remove: string[][]) {
+function editTOML(text: string, set: Leaf[], remove: string[][]) {
   const lines = text.split('\n');
   const sections = () => {
     const found: { path: string[]; start: number; end: number }[] = [{ path: [], start: -1, end: lines.length }];

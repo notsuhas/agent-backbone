@@ -58,9 +58,9 @@ export function enginePath() {
   const override = process.env.AGENT_BACKBONE_SKILLSHARE;
   if (override) return path.resolve(override);
   const bundled = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../vendor/skillshare');
-  return exists(bundled) ? bundled : fail('Skillshare engine unavailable. Install Agent Backbone with Homebrew or set AGENT_BACKBONE_SKILLSHARE to a trusted native binary.');
+  if (exists(bundled)) return bundled;
+  throw new Error('Skillshare engine unavailable. Install Agent Backbone with Homebrew or set AGENT_BACKBONE_SKILLSHARE to a trusted native binary.');
 }
-export function fail(message: string): never { throw new Error(message); }
 export function quote(value: string) { return "'" + value.replaceAll("'", "'\\''") + "'"; }
 export function repositoryURL(value: string) {
   if (/^[\w.-]+\/[\w.-]+$/.test(value)) return 'https://github.com/' + value.replace(/\.git$/, '') + '.git';

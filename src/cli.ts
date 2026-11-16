@@ -33,7 +33,7 @@ cli.command('disable <names...>').description('Hide shared skills while continui
 cli.command('launch <agent> [arguments...]').allowUnknownOption().allowExcessArguments().passThroughOptions().action((agent: string, args: string[]) => launch(agentSchema.parse(agent), args));
 cli.command('validate').option('--repository <path>').action((options: { repository?: string }) => validate(options.repository ? path.resolve(options.repository) : config().repo));
 const upstream = cli.command('upstream');
-upstream.command('check').option('--repository <path>').action(async (options: { repository?: string }) => { const repo = options.repository ? path.resolve(options.repository) : config().repo; await upstreamCheck(repo, manifest(repo)); });
+upstream.command('check').option('--repository <path>').action(async (options: { repository?: string }) => { const repo = options.repository ? path.resolve(options.repository) : config().repo; await upstreamCheck(manifest(repo)); });
 upstream.command('update [name]').option('--all').option('--repository <path>').action(async (name: string | undefined, options: { all?: boolean; repository?: string }) => {
   if (!name && !options.all) throw new Error('Choose a package or --all.');
   if (name && options.all) throw new Error('Choose a package or --all, not both.');

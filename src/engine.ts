@@ -55,7 +55,6 @@ export async function prepareEngine(current: Config, data: Manifest) {
   fs.chmodSync(file, 0o600);
   const defaultConfig = path.join(paths().home, '.config/skillshare/config.yaml');
   if (isLink(defaultConfig) && real(defaultConfig) === real(deliveryPath())) { fs.unlinkSync(defaultConfig); fs.symlinkSync(file, defaultConfig); }
-  return document;
 }
 export async function engineSelection(current: Config, data: Manifest) {
   await prepareEngine(current, data);

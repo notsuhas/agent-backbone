@@ -25,7 +25,7 @@ async function tree(upstream: Upstream) {
   try { await clone(upstream, path.join(temp, 'source')); return await run(['git', 'rev-parse', upstream.path === '.' ? 'HEAD^{tree}' : 'HEAD:' + upstream.path], path.join(temp, 'source')); }
   finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
-export async function upstreamCheck(repo: string, data: Manifest, force = true, quiet = false) {
+export async function upstreamCheck(data: Manifest, force = true, quiet = false) {
   const file = path.join(paths().state, 'upstreams.json'), cached = checksSchema.parse(readJSON(file));
   for (const pkg of data.packages) {
     const upstream = pkg.upstream;
@@ -41,7 +41,6 @@ export async function upstreamCheck(repo: string, data: Manifest, force = true, 
     if (!quiet || old?.status === 'review_available') (quiet ? process.stderr : process.stdout).write(pkg.name + ': ' + (old?.status || 'unknown') + (old?.check_status ? ' (latest check unavailable)' : '') + '\n');
   }
   saveJSON(file, cached);
-  return cached;
 }
 async function updatePackage(repo: string, data: Manifest, pkg: Package) {
   const upstream = pkg.upstream;
@@ -52,7 +51,7 @@ async function updatePackage(repo: string, data: Manifest, pkg: Package) {
     const clonePath = path.join(temp, 'source');
     await clone(upstream, clonePath);
     const approved_tree = await run(['git', 'rev-parse', upstream.path === '.' ? 'HEAD^{tree}' : 'HEAD:' + upstream.path], clonePath);
-    if (approved_tree === upstream.approved_tree) { process.stdout.write(pkg.name + ': already current\n'); return false; }
+    if (approved_tree === upstream.approved_tree) { process.stdout.write(pkg.name + ': already current\n'); return; }
     const approved_commit = await run(['git', 'rev-parse', 'HEAD'], clonePath);
     const destination = contained(repo, pkg.path), staged = path.join(temp, 'package');
     const source = contained(clonePath, upstream.path);
@@ -100,7 +99,6 @@ async function updatePackage(repo: string, data: Manifest, pkg: Package) {
     upstream.approved_commit = approved_commit;
     saveJSON(path.join(repo, 'backbone.json'), data);
     process.stdout.write('Updated ' + pkg.name + ' locally; host adapters preserved. Review the Git diff before publishing.\n');
-    return true;
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 export async function upstreamUpdate(repo: string, name?: string, all = false) {
@@ -108,11 +106,9 @@ export async function upstreamUpdate(repo: string, name?: string, all = false) {
   if (await run(['git', 'status', '--porcelain'], repo)) throw new Error('Review existing local edits before updating upstream packages.');
   const packages = all ? data.packages.filter(pkg => pkg.upstream) : data.packages.filter(pkg => pkg.name === name);
   if (!packages.length) throw new Error('No configured upstream package selected.');
-  let changes = 0;
-  for (const pkg of packages) if (await updatePackage(repo, data, pkg)) changes++;
+  for (const pkg of packages) await updatePackage(repo, data, pkg);
   manifest(repo);
   process.stdout.write(await run(['git', 'diff', '--stat'], repo) + '\n');
-  return changes;
 }
 export function adopt(repo: string, source: string, name: string) {
   const data = manifest(repo), origin = real(source), view = contained(repo, data.skills_dir), destination = path.join(repo, 'packages', name);
