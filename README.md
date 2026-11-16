@@ -113,7 +113,7 @@ Put one Markdown file per subagent in `subagents/`, named after it, with `name` 
 
 ## Refresh and safety
 
-Refresh runs before a launcher starts an agent and from each agent's session-start hook. Version and help probes (`--version`, `-h` and similar) skip it. Codex needs `[features] hooks = true`; Backbone records the trust hash for its own refresh hook in `~/.codex/config.toml`, so Codex runs it without asking, while other hooks still need your approval.
+Refresh runs before a launcher starts an agent and from each agent's session-start hook. Version and help probes (`--version`, `-h` and similar) skip it. A startup refresh within 60 seconds of the last successful one is skipped, so a launcher and the session hook it leads to refresh once. Session hooks allow 120 seconds. Codex needs `[features] hooks = true`; Backbone records the trust hash for its own refresh hook in `~/.codex/config.toml`, so Codex runs it without asking, while other hooks still need your approval.
 
 Dirty sources, divergence and network failures keep the cached delivery and report the problem. Dashboard edits apply locally; review, commit and push them to reach other machines. Native ignore patterns, resource settings and copy mode survive refresh. Locally edited managed copies and generated package views are detected and refused.
 

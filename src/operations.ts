@@ -39,6 +39,8 @@ async function installIntegration(current: Config) {
   if (current.targets.includes('claude') && exists(settings)) fs.copyFileSync(isLink(settings) ? real(settings) : settings, path.join(current.backup, 'claude-settings.json'));
   await sessionRefresh(current);
 }
+// Session hooks get as long as a full refresh may take.
+const hookTimeout = 120;
 const sessionHookSchema = z.object({ hooks: z.array(z.object({ command: z.string().optional() }).passthrough()).optional() }).passthrough();
 function saveIfChanged(file: string, document: unknown) {
   const text = JSON.stringify(document, null, 2) + '\n';
@@ -61,18 +63,18 @@ async function sessionRefresh(current: Config) {
   if (current.targets.includes('claude')) {
     const file = path.join(home, '.claude/settings.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helper);
+    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper, timeout: hookTimeout }] }, helper);
     document.hooks = hooks;
     saveIfChanged(target, document);
   }
   if (current.targets.includes('codex')) {
     const file = path.join(home, '.codex/hooks.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    const sessions = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helper);
+    const sessions = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: hookTimeout }] }, helper);
     hooks.SessionStart = sessions;
     document.hooks = hooks;
     saveIfChanged(target, document);
-    trustCodexHook(path.join(home, '.codex/config.toml'), target + ':session_start:' + (sessions.length - 1) + ':0', codexHookTrustHash('session_start', helper, 30));
+    trustCodexHook(path.join(home, '.codex/config.toml'), target + ':session_start:' + (sessions.length - 1) + ':0', codexHookTrustHash('session_start', helper, hookTimeout));
   }
   if (current.targets.includes('opencode')) {
     const file = path.join(home, '.config/opencode/plugins/agent-backbone-refresh.js');
@@ -161,11 +163,13 @@ export async function configure(options: IConfigure) {
     await installIntegration(current);
     process.stdout.write('Configured ' + repo + ' for ' + agents.join(', ') + '. Backups: ' + backup + '\n');
   });
-  await sync(true);
+  await sync(true, false);
 }
-export async function sync(startup = false) {
+export async function sync(startup = false, reuseRecent = startup) {
   await locked(async () => {
     const current = config(), { state, directory } = paths(), health = healthSchema.parse(readJSON(path.join(state, 'status.json')));
+    // A launcher refreshes just before the agent's session hook does; the second one has nothing new to apply.
+    if (reuseRecent && health.last_success && Date.now() / 1000 - health.last_success < 60) return;
     health.last_attempt = Date.now() / 1000;
     try {
       if (await run(['git', 'status', '--porcelain'], current.repo)) throw new Error('Unpublished local edits; commit/push or stash them before refreshing.');

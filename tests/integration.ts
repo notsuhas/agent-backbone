@@ -54,7 +54,9 @@ function fixture() {
     data.packages.push({ name: 'demo', path: 'packages/demo', claude_plugin: true, host_notes: 'HOST.md', local_files: ['HOST.md', '.claude-plugin/plugin.json'] });
     write(path.join(repo, 'backbone.json'), JSON.stringify(data)); push(); return pkg;
   }
-  return { root, home, repo, remote, env, git, commit, exec, cli, cliFail, configure, writer, push, plugin, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  // Makes the last successful refresh old enough that startup refreshes run again.
+  function age() { const file = path.join(home, '.local/state/agent-backbone/status.json'); const status = healthSchema.parse(json(file)); write(file, JSON.stringify({ ...status, last_success: (status.last_success ?? 0) - 120 })); }
+  return { root, home, repo, remote, env, git, commit, exec, cli, cliFail, configure, writer, push, plugin, age, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test('agent information probes skip refresh while sessions receive upstream updates', t => {
@@ -72,6 +74,7 @@ test('agent information probes skip refresh while sessions receive upstream upda
       assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Version one/);
     }
   }
+  f.age();
   assert.equal(f.exec(opencode, ['run', 'hello']).stdout, 'original opencode run hello\n');
   assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Updated before session/);
 });
@@ -97,7 +100,7 @@ test('preflights foreign destinations without partial installs', t => {
   assert.equal(read(foreign), 'Foreign installer content\n'); assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/example')));
 });
 test('dirty or offline startup retains cached delivery', t => {
-  const f = fixture(); t.after(f.cleanup); f.configure();
+  const f = fixture(); t.after(f.cleanup); f.configure(); f.age();
   write(path.join(f.repo, 'instructions/global.md'), 'Unpublished local edit\n'); f.cli('sync', '--startup');
   const status = healthSchema.parse(json(path.join(f.home, '.local/state/agent-backbone/status.json')));
   assert.equal(status.status, 'stale'); assert.match(status.reason || '', /Unpublished/);
@@ -434,6 +437,18 @@ test('native hooks and extras persist without executing hooks or losing startup 
   assert.match(f.cli('hooks', 'list', '--json', '--global').stdout, /fixture/);
 });
 
+test('a startup refresh right after a successful one is skipped and hooks allow a full refresh', t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  const statusFile = path.join(f.home, '.local/state/agent-backbone/status.json'), before = read(statusFile);
+  const writer = f.writer(); write(path.join(writer, 'instructions/global.md'), 'Shared instruction v2\n'); f.push(writer);
+  f.cli('sync', '--startup');
+  assert.equal(read(statusFile), before); assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Shared instruction v1/);
+  f.age(); f.cli('sync', '--startup');
+  assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Shared instruction v2/);
+  const timeouts = (file: string) => [...read(file).matchAll(/"timeout": (\d+)/g)].map(match => match[1]);
+  assert.deepEqual(timeouts(path.join(f.home, '.claude/settings.json')), ['120']);
+  assert.deepEqual(timeouts(path.join(f.home, '.codex/hooks.json')), ['120']);
+});
 test('Codex trust hashes cover the sorted compact hook identity', () => {
   // Mirrors codex-rs hook_hash and version_for_toml.
   const identity = '{"event_name":"session_start","hooks":[{"async":false,"command":"echo hello","timeout":10,"type":"command"}]}';
@@ -455,7 +470,7 @@ test('every agent refreshes at session start and no background timer remains', t
   assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
   assert.match(read(path.join(f.home, '.cursor/hooks.json')), /echo keep/);
   const hooksFile = path.join(f.home, '.codex/hooks.json');
-  const expected = 'sha256:' + createHash('sha256').update(JSON.stringify({ event_name: 'session_start', hooks: [{ async: false, command: helper, timeout: 30, type: 'command' }] })).digest('hex');
+  const expected = 'sha256:' + createHash('sha256').update(JSON.stringify({ event_name: 'session_start', hooks: [{ async: false, command: helper, timeout: 120, type: 'command' }] })).digest('hex');
   const trust = '[hooks.state.' + JSON.stringify(hooksFile + ':session_start:1:0') + ']\ntrusted_hash = ' + JSON.stringify(expected);
   assert.ok(read(path.join(f.home, '.codex/config.toml')).includes(trust));
   const plugin = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
