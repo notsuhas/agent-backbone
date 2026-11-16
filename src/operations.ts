@@ -91,12 +91,10 @@ function refresh() {
   return new Promise((resolve) => {
     const done = () => { running = false; clearTimeout(timer); resolve(); };
     const timer = setTimeout(done, ${hookTimeout * 1000});
-    timer.unref?.();
     try {
       const child = spawn(HELPER, [], { detached: true, stdio: "ignore" });
       child.on("error", done);
       child.on("exit", done);
-      child.unref();
     } catch { done(); }
   });
 }
