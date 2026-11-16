@@ -467,6 +467,43 @@ test('every agent refreshes at session start and no background timer remains', t
   assert.ok(!fs.existsSync(path.join(f.home, 'Library/LaunchAgents')) || fs.readdirSync(path.join(f.home, 'Library/LaunchAgents')).length === 0);
 });
 
+test('shared settings from Git merge into every agent and leave local keys alone', t => {
+  const f = fixture(); t.after(f.cleanup);
+  const cursorDir = process.platform === 'darwin' ? path.join(f.home, 'Library/Application Support/Cursor/User') : path.join(f.home, '.config/Cursor/User');
+  write(path.join(f.home, '.claude/settings.json'), JSON.stringify({ theme: 'light', localOnly: 1, skillOverrides: { cloudflare: 'off' }, enabledPlugins: { 'local@x': true } }));
+  write(path.join(f.home, '.codex/config.toml'), '# my comment\nmodel = "old"\nkeep = 1\n\n[projects."/tmp/p"]\ntrust_level = "trusted"\n\n[mcp_servers.local]\ncommand = "x"\n');
+  write(path.join(f.home, '.config/opencode/opencode.jsonc'), '{\n  // comment\n  "mcp": { "local": { "type": "local" } },\n  "plugin": ["old"],\n}\n');
+  write(path.join(cursorDir, 'settings.json'), '{ "editor.fontSize": 12 }');
+  write(path.join(f.repo, 'settings/claude.json'), JSON.stringify({ theme: 'dark', skillOverrides: {}, enabledPlugins: { 'shared@y': false }, statusLine: { type: 'command', command: 'echo hi' } }));
+  write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\napproval_policy = "never"\n\n[features]\nhooks = true\n\n[apps."connector_1"]\nenabled = false\n');
+  write(path.join(f.repo, 'settings/opencode.json'), JSON.stringify({ plugin: [], tools: { 'argent*': true } }));
+  write(path.join(f.repo, 'settings/cursor.json'), JSON.stringify({ 'window.commandCenter': true }));
+  f.push(); f.configure();
+  const claude = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.claude/settings.json')));
+  assert.equal(claude.theme, 'dark'); assert.equal(claude.localOnly, 1); assert.deepEqual(claude.skillOverrides, {});
+  assert.deepEqual(claude.enabledPlugins, { 'local@x': true, 'shared@y': false });
+  assert.match(JSON.stringify(claude.hooks), /agent-backbone-refresh/);
+  const codex = read(path.join(f.home, '.codex/config.toml'));
+  assert.match(codex, /^# my comment\nmodel = "new"\nkeep = 1\napproval_policy = "never"/);
+  assert.match(codex, /\[projects\."\/tmp\/p"\]\ntrust_level = "trusted"/);
+  assert.match(codex, /\[mcp_servers\.local\]\ncommand = "x"/);
+  assert.match(codex, /\[features\]\nhooks = true/);
+  assert.match(codex, /\[apps\.connector_1\]\nenabled = false/);
+  const opencode = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.config/opencode/opencode.jsonc')));
+  assert.deepEqual(opencode.plugin, []); assert.deepEqual(opencode.tools, { 'argent*': true }); assert.deepEqual(opencode.mcp, { local: { type: 'local' } });
+  assert.deepEqual(json(path.join(cursorDir, 'settings.json')), { 'editor.fontSize': 12, 'window.commandCenter': true });
+  write(path.join(f.repo, 'settings/codex.toml'), 'model = "new"\n\n[features]\nhooks = true\n');
+  write(path.join(f.repo, 'settings/claude.json'), JSON.stringify({ theme: 'dark' }));
+  f.push(); f.cli('sync');
+  const after = read(path.join(f.home, '.codex/config.toml'));
+  assert.ok(!after.includes('approval_policy') && !after.includes('connector_1') && after.includes('keep = 1'));
+  const claudeAfter = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.claude/settings.json')));
+  assert.equal(claudeAfter.statusLine, undefined); assert.equal(claudeAfter.skillOverrides, undefined); assert.deepEqual(claudeAfter.enabledPlugins, { 'local@x': true });
+  f.cli('validate', '--repository', f.repo);
+  write(path.join(f.repo, 'settings/codex.toml'), '[mcp_servers.bad]\ncommand = "x"\n');
+  assert.match(f.cliFail('validate', '--repository', f.repo).stderr, /may not set mcp_servers/);
+});
+
 test('migration removes generated plugin exclusions in modern Skillshare target syntax', t => {
   const f = fixture(); t.after(f.cleanup); f.plugin(); f.configure();
   const control = path.join(f.home, '.config/agent-backbone/skillshare-control.yaml');

@@ -8,6 +8,7 @@ import { digest, paths, exists, real, isLink, readJSON, saveJSON, run, commandPa
 import { upstreamCheck } from './upstream.js';
 import { syncRuntimes } from './runtimes.js';
 import { createHash } from 'node:crypto';
+import { applySettings } from './settings.js';
 
 function recordCopies(current: Config) {
   const entries = Object.entries(current.managed_links).filter(([target]) => exists(target) && !isLink(target) && fs.statSync(target).isDirectory());
@@ -178,6 +179,7 @@ export async function sync(startup = false) {
       current.managed_links = await apply({ repo: current.repo, data, agents: current.targets, previous: current, backup: backupDir('sync-backup'), engine: current.engine, disabled: current.disabled_skills });
       recordCopies(current);
       saveJSON(path.join(directory, 'config.json'), current);
+      await applySettings(current);
       await sessionRefresh(current);
       health.status = 'current'; health.reason = null; health.last_success = Date.now() / 1000;
       await upstreamCheck(current.repo, data, false, true);
