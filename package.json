@@ -1,6 +1,6 @@
 {
   "name": "agent-backbone",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Keep coding agents' skills, MCP servers, hooks, instructions and settings in sync from one Git repository.",
   "license": "MIT",
   "repository": {

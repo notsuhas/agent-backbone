@@ -82,5 +82,5 @@ export async function syncRuntimes(current: Config) {
   const updated = z.object({ skills: z.record(z.string(), z.unknown()).default({}) }).parse(readJSON(lock));
   if (!Object.keys(updated.skills).some(name => name.startsWith('argent-'))) throw new Error('Argent skills were not registered by its installer.');
   saveJSON(stateFile, { argent: desired });
-  process.stdout.write('Argent ' + desired.version + ' applied; its installer owns skill updates.\n');
+  process.stderr.write('Argent ' + desired.version + ' applied; its installer owns skill updates.\n');
 }
