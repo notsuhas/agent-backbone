@@ -39,7 +39,7 @@ New configurations target Claude, Codex and OpenCode. Choose others with `--agen
 | `cursor` | `~/.cursor/skills` | none | `sessionStart` hook |
 | `gemini` | `~/.gemini/skills` | none | none |
 
-Every target with an executable on `PATH` at configure time also gets a launcher in `~/.local/bin` that refreshes before starting the original executable. Cursor's hook is installed whenever `~/.cursor` exists. When `~/.grok` exists, Grok gets its own `SessionStart` hook file, `~/.grok/hooks/agent-backbone-refresh.json`, because it does not load the Claude or Cursor hooks.
+Every target with an executable on `PATH` at configure time also gets a launcher in `~/.local/bin` that refreshes before starting the original executable. When the original is one binary in a native installer's `versions` folder, the launcher starts the newest version there, so the agent keeps updating. Cursor's hook is installed whenever `~/.cursor` exists. When `~/.grok` exists, Grok gets its own `SessionStart` hook file, `~/.grok/hooks/agent-backbone-refresh.json`. Grok can also load the Claude and Cursor hooks for compatibility; a refresh that already ran in the last minute is skipped, so repeats cost nothing.
 
 ## Content repository
 

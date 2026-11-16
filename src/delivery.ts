@@ -99,7 +99,10 @@ function projection(repo: string, data: Manifest, disabled: Set<string>) {
       const enabledDirs = new Set(enabled.map(([, dir]) => real(dir)));
       for (const skillFile of walk(pending).filter(file => path.basename(file) === 'SKILL.md')) {
         const relative = path.relative(pending, path.dirname(skillFile));
-        if (!enabledDirs.has(real(path.join(source, relative)))) fs.rmSync(path.dirname(skillFile), { recursive: true, force: true });
+        // A disabled skill inside an enabled one is part of the parent's files: keep it there; its flattened name is excluded.
+        const parents = relative.split(path.sep).slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join(path.sep));
+        const kept = enabledDirs.has(real(path.join(source, relative))) || parents.some(parent => enabledDirs.has(real(path.join(source, parent))));
+        if (!kept) fs.rmSync(path.dirname(skillFile), { recursive: true, force: true });
         else if (pkg.skill_prefix) fs.writeFileSync(skillFile, prefixedMetadata(fs.readFileSync(skillFile, 'utf8'), pkg.skill_prefix));
       }
       validateLinks(pending);

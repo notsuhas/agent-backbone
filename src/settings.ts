@@ -80,8 +80,11 @@ function tomlValue(value: unknown): string {
   if (Array.isArray(value) && value.every(item => ['string', 'number', 'boolean'].includes(typeof item))) return '[' + value.map(tomlValue).join(', ') + ']';
   throw new Error('Shared TOML settings support strings, numbers, booleans and arrays of those; use a table for: ' + JSON.stringify(value));
 }
+const segment = String.raw`"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+`;
+// Quoted keys may contain brackets, as in [projects."/p/[w]"].
+const header = new RegExp(String.raw`^\s*\[\s*((?:${segment})(?:\s*\.\s*(?:${segment}))*)\s*\]\s*(#.*)?$`);
 function headerPath(line: string): string[] | undefined {
-  const match = /^\s*\[([^\[\]]+)\]\s*(#.*)?$/.exec(line);
+  const match = header.exec(line);
   if (!match) return undefined;
   const parts: string[] = [], text = match[1]!.trim();
   let i = 0;
@@ -93,7 +96,6 @@ function headerPath(line: string): string[] | undefined {
   }
   return parts;
 }
-const segment = String.raw`"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+`;
 const assignment = new RegExp(String.raw`^\s*((?:${segment})(?:\s*\.\s*(?:${segment}))*)\s*=`);
 const unquote = (raw: string) => raw.startsWith('"') ? z.string().parse(JSON.parse(raw)) : raw.startsWith("'") ? raw.slice(1, -1) : raw;
 const startsWith = (list: string[], prefix: string[]) => prefix.length <= list.length && prefix.every((part, index) => list[index] === part);
@@ -157,7 +159,13 @@ function editTOML(text: string, set: Leaf[], remove: string[][]) {
   };
   for (const parts of remove) {
     const { section, entry } = locate(parts);
-    if (!section || !entry) continue;
+    if (!section || !entry) {
+      // Still set in another form: keep it managed and say so, rather than leave it active forever.
+      let value: unknown = parseTOML(lines.join('\n'));
+      for (const part of parts) value = isObject(value) ? value[part] : undefined;
+      if (value !== undefined) throw new Error(parts.join('.') + ' is set with a dotted key or inline table here; move it under a [' + parts.slice(0, -1).map(tomlKey).join('.') + '] header so it can be removed');
+      continue;
+    }
     const count = entry.end - entry.start + 1, end = section.end - count;
     lines.splice(entry.start, count);
     // Drop the header too once no keys remain.

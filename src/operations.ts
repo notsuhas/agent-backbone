@@ -121,7 +121,7 @@ export default {
     const file = path.join(home, '.cursor/hooks.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
     const sessions = z.array(z.object({ command: z.string().optional() }).passthrough()).parse(hooks.sessionStart || []);
-    hooks.sessionStart = [...sessions.filter(item => item.command !== helper), { command: helper }];
+    hooks.sessionStart = [...sessions.filter(item => item.command !== helper), { command: helper, timeout: hookTimeout }];
     document.hooks = hooks;
     document.version ??= 1;
     saveIfChanged(target, document);
@@ -301,12 +301,22 @@ export function inventory() {
   process.stdout.write(JSON.stringify({ skills: byName, duplicates, conflicting_skills: Object.entries(duplicates).filter(([, values]) => new Set(values.map(value => value.sha256)).size > 1).map(([name]) => name) }, null, 2) + '\n');
 }
 export async function launch(agent: Agent, args: string[]) {
-  const executable = config().agents[agent];
-  if (!executable) throw new Error('Agent executable was not registered during configuration.');
+  const registered = config().agents[agent];
+  if (!registered) throw new Error('Agent executable was not registered during configuration.');
+  const executable = newestVersion(registered);
   const forwarded = args[0] === '--' ? args.slice(1) : args;
   const informationOnly = forwarded.length === 1 && ['--version', '-v', '-V', '--help', '-h'].includes(forwarded[0] || '');
   if (!informationOnly) await sync(true);
   execute(executable, forwarded);
+}
+// Native installers keep one binary per version in a versions folder; a registered version would pin the agent forever.
+function newestVersion(executable: string) {
+  const resolved = exists(executable) ? real(executable) : executable, dir = path.dirname(resolved);
+  const semver = /^\d+(\.\d+)+$/, order = (name: string) => name.split('.').map(Number);
+  if (path.basename(dir) !== 'versions' || !semver.test(path.basename(resolved))) return executable;
+  const versions = fs.readdirSync(dir).filter(name => semver.test(name) && fs.statSync(path.join(dir, name)).isFile());
+  versions.sort((a, b) => { const x = order(a), y = order(b); for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0); return 0; });
+  return path.join(dir, versions[versions.length - 1] ?? path.basename(resolved));
 }
 function execute(executable: string, args: string[]): never {
   const env: Record<string, string> = {};
