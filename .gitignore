@@ -1,15 +1,5 @@
-.env
-.env.*
-!.env.example
-auth.json
-credentials.json
-config.yaml
-refresh-status.json
-*.lock
-*.log
-__pycache__/
-.DS_Store
 node_modules/
 dist/
-!package-lock.json
 vendor/
+*.tgz
+.DS_Store
