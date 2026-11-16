@@ -504,6 +504,12 @@ test('shared settings from Git merge into every agent and leave local keys alone
   assert.ok(!after.includes('approval_policy') && !after.includes('connector_1') && after.includes('keep = 1'));
   const claudeAfter = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.claude/settings.json')));
   assert.equal(claudeAfter.statusLine, undefined); assert.equal(claudeAfter.skillOverrides, undefined); assert.deepEqual(claudeAfter.enabledPlugins, { 'local@x': true });
+  fs.rmSync(path.join(f.repo, 'settings/codex.toml')); fs.rmSync(path.join(f.repo, 'settings/cursor.json')); f.push(); f.cli('sync');
+  const removed = read(path.join(f.home, '.codex/config.toml'));
+  assert.ok(!removed.includes('model = ') && !/^\[features\]/m.test(removed) && removed.includes('keep = 1'));
+  assert.deepEqual(json(path.join(cursorDir, 'settings.json')), { 'editor.fontSize': 12 });
+  const ledger = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.local/state/agent-backbone/settings-managed.json')));
+  assert.equal(ledger.codex, undefined); assert.equal(ledger.cursor, undefined); assert.ok(ledger.claude);
   f.cli('validate', '--repository', f.repo);
   write(path.join(f.repo, 'settings/codex.toml'), '[mcp_servers.bad]\ncommand = "x"\n');
   assert.match(f.cliFail('validate', '--repository', f.repo).stderr, /may not set mcp_servers/);

@@ -210,8 +210,8 @@ export async function applySettings(current: Config) {
     const file = target.file();
     try {
       const desired = await applyTarget(current, target, file, ledger[target.agent] || []);
-      if (desired) next[target.agent] = desired;
-      else if (ledger[target.agent]) next[target.agent] = ledger[target.agent]!;
+      if (!desired) { if (ledger[target.agent]) next[target.agent] = ledger[target.agent]!; }
+      else if (desired.length) next[target.agent] = desired;
     } catch (error) {
       process.stderr.write('Shared settings not applied to ' + (file || target.agent) + ': ' + (error instanceof Error ? error.message : String(error)) + '\n');
       if (ledger[target.agent]) next[target.agent] = ledger[target.agent]!;
@@ -220,16 +220,17 @@ export async function applySettings(current: Config) {
   saveJSON(ledgerFile, next);
 }
 
-// Returns the managed key paths, or undefined when the target has nothing to manage.
+// Returns the managed key paths, or undefined when the agent is absent; a removed source removes every key it managed.
 async function applyTarget(current: Config, target: Target, file: string | undefined, previous: string[][]) {
-  const desired = readDesired(current.repo, target);
-  if (!desired || !file) return undefined;
+  if (!file) return undefined;
+  const desired = readDesired(current.repo, target) || [];
+  if (!desired.length && !previous.length) return [];
   const wanted = new Set(desired.map(leaf => id(leaf.path)));
   const stale = previous.filter(parts => !wanted.has(id(parts)));
   const destination = isLink(file) ? real(file) : file;
   const text = exists(destination) ? fs.readFileSync(destination, 'utf8') : '';
   const result = target.format === 'json' ? editJSON(text, desired, stale, destination) : editTOML(text, desired, stale);
-  if (result !== text) atomicWrite(destination, result);
+  if (result !== text && (exists(destination) || desired.length)) atomicWrite(destination, result);
   if (target.agent === 'claude') await installClaudePlugins(current, desired);
   return desired.map(leaf => leaf.path);
 }
