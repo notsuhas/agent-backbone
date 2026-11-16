@@ -64,9 +64,11 @@ export async function sessionRefresh(current: Config) {
   if (current.targets.includes('codex')) {
     const file = path.join(home, '.codex/hooks.json'), target = isLink(file) ? real(file) : file;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    hooks.SessionStart = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helpers);
+    const sessions = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: 30 }] }, helpers);
+    hooks.SessionStart = sessions;
     document.hooks = hooks;
     saveIfChanged(target, document);
+    trustCodexHook(path.join(home, '.codex/config.toml'), target + ':session_start:' + (sessions.length - 1) + ':0', codexHookTrustHash('session_start', helper, 30));
   }
   if (current.targets.includes('opencode')) {
     const file = path.join(home, '.config/opencode/plugins/agent-backbone-refresh.js');
@@ -88,6 +90,34 @@ export async function sessionRefresh(current: Config) {
     saveIfChanged(target, document);
   }
   await removeTimer();
+}
+// Codex runs a user hook only after it is trusted: config.toml stores, per hook position, the SHA-256 of the
+// hook's identity as sorted compact JSON (codex-rs hooks discovery: hook_hash + version_for_toml). Recording
+// that hash for Backbone's own refresh hook means Codex never asks; any other hook still needs your approval.
+function sortedJSON(value: unknown): string {
+  if (Array.isArray(value)) return '[' + value.map(sortedJSON).join(',') + ']';
+  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + sortedJSON((value as Record<string, unknown>)[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
+export function codexHookTrustHash(event: string, command: string, timeout: number) {
+  const identity = { event_name: event, hooks: [{ type: 'command', command, timeout, async: false }] };
+  return 'sha256:' + createHash('sha256').update(sortedJSON(identity)).digest('hex');
+}
+function trustCodexHook(file: string, key: string, hash: string) {
+  const target = isLink(file) ? real(file) : file;
+  const text = exists(target) ? fs.readFileSync(target, 'utf8') : '';
+  const header = '[hooks.state.' + JSON.stringify(key) + ']';
+  const block = header + '\ntrusted_hash = ' + JSON.stringify(hash) + '\n';
+  const lines = text.split('\n'), start = lines.indexOf(header);
+  let next: string;
+  if (start < 0) next = text + (text && !text.endsWith('\n') ? '\n' : '') + (text ? '\n' : '') + block;
+  else {
+    let end = start + 1;
+    while (end < lines.length && !lines[end]!.startsWith('[')) end++;
+    const body = lines.slice(start + 1, end).filter(line => line.trim() && !/^trusted_hash\s*=/.test(line));
+    next = [...lines.slice(0, start), header, 'trusted_hash = ' + JSON.stringify(hash), ...body, '', ...lines.slice(end)].join('\n').replace(/\n{3,}/g, '\n\n');
+  }
+  if (next !== text) { fs.mkdirSync(path.dirname(target), { recursive: true }); atomicWrite(target, next); }
 }
 // Earlier versions installed a launchd timer that refreshed every 15 minutes. Remove it wherever it remains.
 async function removeTimer() {

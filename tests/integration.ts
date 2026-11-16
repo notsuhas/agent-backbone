@@ -5,10 +5,12 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { createServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { parse as parseYAML } from 'yaml';
 import { configSchema, healthSchema, manifestSchema } from '../src/model.js';
+import { codexHookTrustHash } from '../src/operations.js';
 
 const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/agent-backbone');
 const engine = process.env.AGENT_BACKBONE_SKILLSHARE;
@@ -430,6 +432,10 @@ test('native hooks and extras persist without executing hooks or losing startup 
   assert.match(f.cli('hooks', 'list', '--json', '--global').stdout, /fixture/);
 });
 
+test('Codex trust hashes match Codex for a known hook', () => {
+  const expected = 'sha256:a01c7756e687aa8674f2a4d3f351d14ae65dd3b8ca19b619378b51afb7c30562';
+  assert.equal(codexHookTrustHash('session_start', "bash '/Users/notsuhas/.codex/herdr-agent-state.sh' session", 10), expected);
+});
 test('every agent refreshes at session start and no background timer remains', t => {
   const f = fixture(); t.after(f.cleanup);
   const legacy = path.join(f.home, 'Library/LaunchAgents/ai.agent-backbone.refresh.plist');
@@ -445,12 +451,17 @@ test('every agent refreshes at session start and no background timer remains', t
   assert.match(read(path.join(f.home, '.codex/hooks.json')), /echo keep/);
   assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
   assert.match(read(path.join(f.home, '.cursor/hooks.json')), /echo keep/);
+  const hooksFile = path.join(f.home, '.codex/hooks.json');
+  const expected = 'sha256:' + createHash('sha256').update(JSON.stringify({ event_name: 'session_start', hooks: [{ async: false, command: helper, timeout: 30, type: 'command' }] })).digest('hex');
+  const trust = '[hooks.state.' + JSON.stringify(hooksFile + ':session_start:1:0') + ']\ntrusted_hash = ' + JSON.stringify(expected);
+  assert.ok(read(path.join(f.home, '.codex/config.toml')).includes(trust));
   const plugin = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
   assert.ok(plugin.includes(JSON.stringify(helper)) && plugin.includes('session.created'));
   fs.writeFileSync(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: {} }));
   f.cli('sync');
   assert.equal(count(path.join(f.home, '.codex/hooks.json')), 1);
   f.configure();
+  assert.equal(read(path.join(f.home, '.codex/config.toml')).split('trusted_hash').length - 1, 2);
   assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
   assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
   assert.ok(!fs.existsSync(path.join(f.home, 'Library/LaunchAgents')) || fs.readdirSync(path.join(f.home, 'Library/LaunchAgents')).length === 0);
