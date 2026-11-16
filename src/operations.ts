@@ -280,7 +280,8 @@ export function skills() {
 export async function status() {
   const current = config(), health = healthSchema.parse(readJSON(path.join(paths().state, 'status.json')));
   process.stdout.write('Agent Backbone ' + VERSION + '\nSource: ' + current.repo + '\nSync: ' + (health.status || 'unknown') + ' | revision ' + (health.revision || 'unknown').slice(0, 12) + '\nLocal edits: ' + (await run(['git', 'status', '--porcelain'], current.repo) ? 'pending' : 'none') + '\nTargets: ' + current.targets.join(', ') + '\nDisabled skills: ' + (current.disabled_skills.join(', ') || 'none') + '\n');
-  for (const [name, info] of Object.entries(checksSchema.parse(readJSON(path.join(paths().state, 'upstreams.json'))))) process.stdout.write('Upstream ' + name + ': ' + (info.status || 'unknown') + '\n');
+  const tracked = new Set(manifest(current.repo).packages.flatMap(pkg => pkg.upstream ? [pkg.name] : []));
+  for (const [name, info] of Object.entries(checksSchema.parse(readJSON(path.join(paths().state, 'upstreams.json')))).filter(([name]) => tracked.has(name))) process.stdout.write('Upstream ' + name + ': ' + (info.status || 'unknown') + '\n');
 }
 export function inventory() {
   const byName: Record<string, { agent: string; path: string; sha256: string; installer_source?: z.infer<typeof installerSchema>['skills'][string] }[]> = {}, visited = new Set<string>(), installed: z.infer<typeof installerSchema>['skills'] = {};

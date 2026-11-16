@@ -119,6 +119,18 @@ test('adopts full assets and installer provenance without removing originals', t
   skill(path.join(f.home, '.codex/skills/external'), 'external', 'Different body');
   assert.ok(z.object({ conflicting_skills: z.array(z.string()) }).parse(JSON.parse(f.cli('inventory').stdout)).conflicting_skills.includes('external'));
 });
+test('status and refresh keep upstream checks only for packages in the manifest', t => {
+  const f = fixture(); t.after(f.cleanup); f.plugin();
+  const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
+  data.packages[0]!.upstream = { repository: 'https://github.com/example/none.git', path: '.', ref: 'main', approved_tree: 'abc' };
+  write(path.join(f.repo, 'backbone.json'), JSON.stringify(data)); f.push(); f.configure();
+  const checks = path.join(f.home, '.local/state/agent-backbone/upstreams.json');
+  write(checks, JSON.stringify({ demo: { checked_at: Date.now() / 1000, approved_tree: 'abc', latest_tree: 'abc', status: 'current' }, gone: { checked_at: 1, status: 'review_available' } }));
+  const output = f.cli('status').stdout;
+  assert.match(output, /Upstream demo: current/); assert.ok(!output.includes('gone'));
+  f.cli('sync');
+  assert.deepEqual(Object.keys(z.record(z.string(), z.unknown()).parse(json(checks))), ['demo']);
+});
 test('remote commits refresh instructions and new skills', t => {
   const f = fixture(); t.after(f.cleanup); f.configure(); const writer = f.writer();
   write(path.join(writer, 'instructions/global.md'), 'Shared instruction v2\n'); skill(path.join(writer, 'skills/new-skill'), 'new-skill'); f.push(writer); f.cli('sync');
