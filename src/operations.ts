@@ -238,7 +238,7 @@ export function inventory() {
     }
   }
   const duplicates = Object.fromEntries(Object.entries(byName).filter(([, values]) => values.length > 1));
-  process.stdout.write(JSON.stringify({ skills: byName, duplicates, conflicting_instructions: Object.entries(duplicates).filter(([, values]) => new Set(values.map(value => value.sha256)).size > 1).map(([name]) => name) }, null, 2) + '\n');
+  process.stdout.write(JSON.stringify({ skills: byName, duplicates, conflicting_skills: Object.entries(duplicates).filter(([, values]) => new Set(values.map(value => value.sha256)).size > 1).map(([name]) => name) }, null, 2) + '\n');
 }
 export async function launch(agent: Agent, args: string[]) {
   const executable = config().agents[agent];

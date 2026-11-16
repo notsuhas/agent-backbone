@@ -112,7 +112,7 @@ test('adopts full assets and installer provenance without removing originals', t
   const pkg = manifestSchema.parse(json(path.join(f.repo, 'backbone.json'))).packages[0];
   assert.equal(pkg?.upstream?.repository, 'https://github.com/example/vendor.git'); assert.equal(pkg?.upstream?.path, 'skills/external');
   skill(path.join(f.home, '.codex/skills/external'), 'external', 'Different body');
-  assert.ok(z.object({ conflicting_instructions: z.array(z.string()) }).parse(JSON.parse(f.cli('inventory').stdout)).conflicting_instructions.includes('external'));
+  assert.ok(z.object({ conflicting_skills: z.array(z.string()) }).parse(JSON.parse(f.cli('inventory').stdout)).conflicting_skills.includes('external'));
 });
 test('remote commits refresh instructions and new skills', t => {
   const f = fixture(); t.after(f.cleanup); f.configure(); const writer = f.writer();
