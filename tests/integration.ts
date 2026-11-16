@@ -478,7 +478,7 @@ test('every agent refreshes at session start and no background timer remains', t
   const trust = '[hooks.state.' + JSON.stringify(hooksFile + ':session_start:1:0') + ']\ntrusted_hash = ' + JSON.stringify(expected);
   assert.ok(read(path.join(f.home, '.codex/config.toml')).includes(trust));
   const plugin = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
-  assert.ok(plugin.includes(JSON.stringify(helper)) && plugin.includes('session.created'));
+  assert.ok(plugin.includes(JSON.stringify(helper)) && plugin.includes('session.created') && plugin.includes('export default') && plugin.includes('id: "agent-backbone-refresh"'));
   const foreign = '[hooks.state.' + JSON.stringify(hooksFile + ':session_start:5:0') + ']\ntrusted_hash = "sha256:other"';
   fs.appendFileSync(path.join(f.home, '.codex/config.toml'), '\n' + foreign + '\n');
   fs.writeFileSync(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: {} }));
@@ -494,6 +494,29 @@ test('every agent refreshes at session start and no background timer remains', t
   assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
   assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
   assert.ok(!fs.existsSync(path.join(f.home, 'Library/LaunchAgents')) || fs.readdirSync(path.join(f.home, 'Library/LaunchAgents')).length === 0);
+});
+
+test('OpenCode plugin waits for the first refresh and tolerates a missing helper', async t => {
+  const f = fixture(); t.after(f.cleanup); f.configure();
+  const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
+  const source = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
+  const marker = path.join(f.root, 'refreshes'), fake = path.join(f.root, 'fake-refresh');
+  write(fake, '#!/bin/sh\nsleep 1\necho run >> ' + JSON.stringify(marker) + '\n'); fs.chmodSync(fake, 0o755);
+  const load = async (target: string, name: string) => {
+    const file = path.join(f.root, name + '.mjs'); write(file, source.replace(JSON.stringify(helper), JSON.stringify(target)));
+    const loaded: { default: { id: string; setup: (context: unknown) => Promise<() => void> } } = await import(file);
+    return loaded.default;
+  };
+  const events = { event: { subscribe: async function* () { yield { type: 'session.created' }; yield { type: 'session.created' }; } } };
+  const plugin = await load(fake, 'present');
+  assert.equal(plugin.id, 'agent-backbone-refresh');
+  const stop = await plugin.setup(events);
+  assert.equal(read(marker), 'run\n');
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  assert.equal(read(marker), 'run\nrun\n');
+  stop();
+  const missing = await load(path.join(f.root, 'missing-helper'), 'missing');
+  (await missing.setup(events))();
 });
 
 test('shared settings from Git merge into every agent and leave local keys alone', t => {

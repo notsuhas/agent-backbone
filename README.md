@@ -35,7 +35,7 @@ New configurations target Claude, Codex and OpenCode. Choose others with `--agen
 |---|---|---|---|
 | `claude` | `~/.claude/skills` | `~/.claude/CLAUDE.md` | `SessionStart` hook |
 | `codex` | `~/.agents/skills` | `~/.codex/AGENTS.md` | `SessionStart` hook |
-| `opencode` | `~/.config/opencode/skills` | `~/.config/opencode/AGENTS.md` | Plugin |
+| `opencode` | `~/.config/opencode/skills` | `~/.config/opencode/AGENTS.md` | Plugin (OpenCode 2 plugin API) |
 | `cursor` | `~/.cursor/skills` | none | `sessionStart` hook |
 | `gemini` | `~/.gemini/skills` | none | none |
 
@@ -136,7 +136,7 @@ Run the dashboard through the managed launcher so package filtering stays active
 
 - `~/.local/bin/skillshare`, `~/.local/bin/<agent>` and `~/.local/bin/agent-backbone-refresh`
 - The refresh entry in `~/.claude/settings.json` and `~/.codex/hooks.json` (`SessionStart`) and `~/.cursor/hooks.json` (`sessionStart`)
-- `~/.config/opencode/plugins/agent-backbone-refresh.js`
+- `~/.config/opencode/plugins/agent-backbone-refresh.js`, an OpenCode 2 plugin that waits up to 120 seconds for the startup refresh
 - `~/.grok/hooks/agent-backbone-refresh.json`, when `~/.grok` exists
 - The Codex hook trust record in `~/.codex/config.toml`
 - Configuration in `~/.config/agent-backbone/` and generated skill views in `~/.local/share/agent-backbone/active/`

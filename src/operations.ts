@@ -78,12 +78,45 @@ async function sessionRefresh(current: Config) {
   }
   if (current.targets.includes('opencode')) {
     const file = path.join(home, '.config/opencode/plugins/agent-backbone-refresh.js');
-    const text = '// Managed by Agent Backbone; configure and refresh overwrite this file.\n'
-      + '// Refreshes shared skills, instructions and MCP definitions when OpenCode starts and when a session is created.\n'
-      + 'import { spawn } from "node:child_process";\n\n'
-      + 'const HELPER = ' + JSON.stringify(helper) + ';\n'
-      + 'function refresh() {\n  try { spawn(HELPER, [], { detached: true, stdio: "ignore" }).unref(); } catch {}\n}\n\n'
-      + 'export const AgentBackboneRefresh = async () => {\n  refresh();\n  return {\n    event: async ({ event }) => {\n      if (event?.type === "session.created") refresh();\n    },\n  };\n};\n';
+    const text = `// Managed by Agent Backbone; configure and refresh overwrite this file.
+// Refreshes shared skills, instructions and MCP definitions when OpenCode starts and when a session is created.
+import { spawn } from "node:child_process";
+
+const HELPER = ${JSON.stringify(helper)};
+let running = false;
+// Resolves when the helper exits, fails to start, or after 120 seconds; skips while one is running.
+function refresh() {
+  if (running) return Promise.resolve();
+  running = true;
+  return new Promise((resolve) => {
+    const done = () => { running = false; clearTimeout(timer); resolve(); };
+    const timer = setTimeout(done, ${hookTimeout * 1000});
+    timer.unref?.();
+    try {
+      const child = spawn(HELPER, [], { detached: true, stdio: "ignore" });
+      child.on("error", done);
+      child.on("exit", done);
+      child.unref();
+    } catch { done(); }
+  });
+}
+
+export default {
+  id: "agent-backbone-refresh",
+  async setup(ctx) {
+    await refresh();
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          if (event?.type === "session.created") void refresh();
+        }
+      } catch {}
+    })();
+    return () => controller.abort();
+  },
+};
+`;
     if (!exists(file) || fs.readFileSync(file, 'utf8') !== text) { fs.mkdirSync(path.dirname(file), { recursive: true }); atomicWrite(file, text); }
   }
   if (exists(path.join(home, '.cursor'))) {
