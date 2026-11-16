@@ -34,141 +34,48 @@ async function installIntegration(current: Config) {
   }
   const settings = path.join(home, '.claude/settings.json');
   if (current.targets.includes('claude') && exists(settings)) fs.copyFileSync(isLink(settings) ? real(settings) : settings, path.join(current.backup, 'claude-settings.json'));
-  await sessionRefresh(current);
+  await removeStartupRefresh();
 }
-// Session hooks get as long as a full refresh may take.
-const hookTimeout = 120;
-const sessionHookSchema = z.object({ hooks: z.array(z.object({ command: z.string().optional() }).passthrough()).optional() }).passthrough();
 function saveIfChanged(file: string, document: unknown) {
   const text = JSON.stringify(document, null, 2) + '\n';
   if (exists(file) && fs.readFileSync(file, 'utf8') === text) return;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   atomicWrite(file, text);
 }
-function withRefresh(entries: unknown, entry: Record<string, unknown>, helper: string) {
-  const sessions = z.array(sessionHookSchema).parse(entries || []);
-  return [...sessions.filter(item => !(item.hooks?.length === 1 && [helper, helper + ' --from-claude'].includes(item.hooks[0]?.command || ''))), entry];
-}
-// Installs the session-start refresh hooks for each agent.
-// Commands listed under refresh in backbone.json run from the repository root after every refresh, in any harness.
 async function runRefreshCommands(repo: string, commands: string[]) {
   for (const command of commands) await run(['sh', '-c', command], repo, 30000).catch(error => process.stderr.write('Refresh command failed (' + command + '): ' + (error instanceof Error ? error.message : String(error)) + '\n'));
 }
-async function sessionRefresh(current: Config) {
+// Migrate installations from releases that refreshed automatically at session startup.
+export async function removeStartupRefresh() {
   const { home } = paths(), helper = path.join(home, '.local/bin/agent-backbone-refresh');
-  atomicWrite(helper, '#!/bin/sh\nif [ "$1" = "--from-claude" ] && [ -n "$GROK_HOOK_EVENT" ]; then exit 0; fi\nexec ' + quote(current.command) + ' sync --startup\n');
-  fs.chmodSync(helper, 0o755);
+  const owned = (command: unknown) => command === helper || command === helper + ' --from-claude';
   const object = z.record(z.string(), z.unknown());
-  if (current.targets.includes('claude')) {
-    const file = path.join(home, '.claude/settings.json'), target = isLink(file) ? real(file) : file;
+  for (const [relative, event] of [
+    ['.claude/settings.json', 'SessionStart'], ['.codex/hooks.json', 'SessionStart'],
+    ['.cursor/hooks.json', 'sessionStart'], ['.grok/hooks/agent-backbone-refresh.json', 'SessionStart'],
+  ]) {
+    const file = path.join(home, relative!), target = isLink(file) ? real(file) : file;
+    if (!exists(target)) continue;
     const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    hooks.SessionStart = withRefresh(hooks.SessionStart, { matcher: 'startup|resume', hooks: [{ type: 'command', command: helper + ' --from-claude', timeout: hookTimeout }] }, helper);
+    if (!Array.isArray(hooks[event!])) continue;
+    const entries = z.array(object).parse(hooks[event!]);
+    const kept = entries.flatMap(entry => {
+      if (owned(entry.command)) return [];
+      if (!Array.isArray(entry.hooks)) return [entry];
+      const handlers = z.array(object).parse(entry.hooks), remaining = handlers.filter(handler => !owned(handler.command));
+      return remaining.length === handlers.length ? [entry] : remaining.length ? [{ ...entry, hooks: remaining }] : [];
+    });
+    if (JSON.stringify(kept) === JSON.stringify(entries)) continue;
+    if (kept.length) hooks[event!] = kept; else delete hooks[event!];
     document.hooks = hooks;
-    saveIfChanged(target, document);
+    if (relative!.startsWith('.grok/') && !Object.keys(hooks).length && Object.keys(document).length === 1) fs.rmSync(target);
+    else saveIfChanged(target, document);
   }
-  if (current.targets.includes('codex')) {
-    const file = path.join(home, '.codex/hooks.json'), target = isLink(file) ? real(file) : file;
-    const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    const sessions = withRefresh(hooks.SessionStart, { hooks: [{ type: 'command', command: helper, timeout: hookTimeout }] }, helper);
-    hooks.SessionStart = sessions;
-    document.hooks = hooks;
-    saveIfChanged(target, document);
-    trustCodexHook(path.join(home, '.codex/config.toml'), target, target + ':session_start:' + (sessions.length - 1) + ':0', codexHookTrustHash('session_start', helper, hookTimeout));
-  }
-  if (current.targets.includes('opencode')) {
-    const file = path.join(home, '.config/opencode/plugins/agent-backbone-refresh.js');
-    const text = `// Managed by Agent Backbone; configure and refresh overwrite this file.
-// Refreshes shared skills, instructions and MCP definitions when OpenCode starts and when a session is created.
-import { spawn } from "node:child_process";
-
-const HELPER = ${JSON.stringify(helper)};
-let running = false;
-// Resolves when the helper exits, fails to start, or after 120 seconds; skips while one is running.
-function refresh() {
-  if (running) return Promise.resolve();
-  running = true;
-  return new Promise((resolve) => {
-    const done = () => { running = false; clearTimeout(timer); resolve(); };
-    const timer = setTimeout(done, ${hookTimeout * 1000});
-    try {
-      const child = spawn(HELPER, [], { detached: true, stdio: "ignore" });
-      child.on("error", done);
-      child.on("exit", done);
-    } catch { done(); }
-  });
-}
-
-export default {
-  id: "agent-backbone-refresh",
-  async setup(ctx) {
-    await refresh();
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-          if (event?.type === "session.created") void refresh();
-        }
-      } catch {}
-    })();
-    return () => controller.abort();
-  },
-};
-`;
-    if (!exists(file) || fs.readFileSync(file, 'utf8') !== text) { fs.mkdirSync(path.dirname(file), { recursive: true }); atomicWrite(file, text); }
-  }
-  if (exists(path.join(home, '.cursor'))) {
-    const file = path.join(home, '.cursor/hooks.json'), target = isLink(file) ? real(file) : file;
-    const document = object.parse(readJSON(target)), hooks = object.parse(document.hooks || {});
-    const sessions = z.array(z.object({ command: z.string().optional() }).passthrough()).parse(hooks.sessionStart || []);
-    hooks.sessionStart = [...sessions.filter(item => item.command !== helper), { command: helper, timeout: hookTimeout }];
-    document.hooks = hooks;
-    document.version ??= 1;
-    saveIfChanged(target, document);
-  }
-  if (exists(path.join(home, '.grok'))) {
-    saveIfChanged(path.join(home, '.grok/hooks/agent-backbone-refresh.json'), { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: helper, timeout: hookTimeout }] }] } });
+  for (const relative of ['.config/opencode/plugins/agent-backbone-refresh.js', '.local/bin/agent-backbone-refresh']) {
+    const file = path.join(home, relative);
+    if (exists(file) && (fs.readFileSync(file, 'utf8').includes('Managed by Agent Backbone') || fs.readFileSync(file, 'utf8').includes(' sync --startup'))) fs.rmSync(file);
   }
   await removeTimer();
-}
-// Codex trusts a hook whose SHA-256 of sorted compact JSON identity is in config.toml (codex-rs hook_hash, version_for_toml).
-function sortedJSON(value: unknown): string {
-  if (Array.isArray(value)) return '[' + value.map(sortedJSON).join(',') + ']';
-  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + sortedJSON((value as Record<string, unknown>)[key])).join(',') + '}';
-  return JSON.stringify(value);
-}
-export function codexHookTrustHash(event: string, command: string, timeout: number) {
-  const identity = { event_name: event, hooks: [{ type: 'command', command, timeout, async: false }] };
-  return 'sha256:' + createHash('sha256').update(sortedJSON(identity)).digest('hex');
-}
-// Drops trust records for Backbone's hook left at older positions in the same hooks.json; other hooks' records stay.
-function withoutStaleTrust(text: string, hooksFile: string, key: string, hash: string) {
-  const lines = text.split('\n'), kept: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const quoted = /^\[hooks\.state\.("(?:[^"\\]|\\.)*")\]\s*$/.exec(lines[i]!)?.[1], name = quoted ? z.string().parse(JSON.parse(quoted)) : '';
-    if (name && name !== key && name.startsWith(hooksFile + ':')) {
-      let end = i + 1;
-      while (end < lines.length && !lines[end]!.startsWith('[')) end++;
-      if (lines.slice(i + 1, end).some(line => /^trusted_hash\s*=\s*"([^"]*)"/.exec(line)?.[1] === hash)) { i = end - 1; continue; }
-    }
-    kept.push(lines[i]!);
-  }
-  return kept.length === lines.length ? text : kept.join('\n').replace(/\n{3,}/g, '\n\n');
-}
-function trustCodexHook(file: string, hooksFile: string, key: string, hash: string) {
-  const target = isLink(file) ? real(file) : file;
-  const original = exists(target) ? fs.readFileSync(target, 'utf8') : '', text = withoutStaleTrust(original, hooksFile, key, hash);
-  const header = '[hooks.state.' + JSON.stringify(key) + ']';
-  const block = header + '\ntrusted_hash = ' + JSON.stringify(hash) + '\n';
-  const lines = text.split('\n'), start = lines.indexOf(header);
-  let next: string;
-  if (start < 0) next = text + (text && !text.endsWith('\n') ? '\n' : '') + (text ? '\n' : '') + block;
-  else {
-    let end = start + 1;
-    while (end < lines.length && !lines[end]!.startsWith('[')) end++;
-    const body = lines.slice(start + 1, end).filter(line => line.trim() && !/^trusted_hash\s*=/.test(line));
-    next = [...lines.slice(0, start), header, 'trusted_hash = ' + JSON.stringify(hash), ...body, '', ...lines.slice(end)].join('\n').replace(/\n{3,}/g, '\n\n');
-  }
-  if (next !== original) { fs.mkdirSync(path.dirname(target), { recursive: true }); atomicWrite(target, next); }
 }
 // Removes the 15-minute launchd timer that versions before 0.9 installed.
 async function removeTimer() {
@@ -210,13 +117,11 @@ export async function configure(options: IConfigure) {
     await installIntegration(current);
     process.stdout.write('Configured ' + repo + ' for ' + agents.join(', ') + '. Backups: ' + backup + '\n');
   });
-  await sync(true, false);
+  await sync(true);
 }
-export async function sync(startup = false, reuseRecent = startup) {
+export async function sync(allowCached = false) {
   await locked(async () => {
     const current = config(), { state, directory } = paths(), health = healthSchema.parse(readJSON(path.join(state, 'status.json')));
-    // A launcher refreshes just before the agent's session hook does; the second one has nothing new to apply.
-    if (reuseRecent && health.last_success && Date.now() / 1000 - health.last_success < 60) return;
     health.last_attempt = Date.now() / 1000;
     try {
       if (await run(['git', 'status', '--porcelain'], current.repo)) throw new Error('Unpublished local edits; commit/push or stash them before refreshing.');
@@ -231,18 +136,18 @@ export async function sync(startup = false, reuseRecent = startup) {
       await applySettings(current);
       applySubagents(current);
       await runRefreshCommands(current.repo, data.refresh);
-      await sessionRefresh(current);
+      await removeStartupRefresh();
       health.status = 'current'; health.reason = null; health.last_success = Date.now() / 1000;
       await upstreamCheck(data, false, true);
     } catch (error) {
       health.status = 'stale'; health.reason = error instanceof Error ? error.message : String(error);
       process.stderr.write('Agent setup refresh failed; cached files retained: ' + health.reason + '\n');
       saveJSON(path.join(state, 'status.json'), health);
-      if (!startup) throw error;
+      if (!allowCached) throw error;
     }
     health.revision = await run(['git', 'rev-parse', 'HEAD'], current.repo);
     saveJSON(path.join(state, 'status.json'), health);
-  }, startup);
+  });
 }
 export async function reconcileEngine() {
   await locked(async () => {
@@ -304,8 +209,6 @@ export async function launch(agent: Agent, args: string[]) {
   if (!registered) throw new Error('Agent executable was not registered during configuration.');
   const executable = newestVersion(registered);
   const forwarded = args[0] === '--' ? args.slice(1) : args;
-  const informationOnly = forwarded.length === 1 && ['--version', '-v', '-V', '--help', '-h'].includes(forwarded[0] || '');
-  if (!informationOnly) await sync(true);
   execute(executable, forwarded);
 }
 // Native installers keep one binary per version in a versions folder; a registered version would pin the agent forever.

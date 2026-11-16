@@ -5,14 +5,12 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { createServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { parse as parseYAML } from 'yaml';
 import { parse as parseJSONC } from 'jsonc-parser';
 import { parse as parseTOML } from 'smol-toml';
 import { configSchema, healthSchema, manifestSchema } from '../src/model.js';
-import { codexHookTrustHash } from '../src/operations.js';
 
 const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/agent-backbone');
 const engine = process.env.AGENT_BACKBONE_SKILLSHARE;
@@ -59,7 +57,7 @@ function fixture() {
   return { root, home, repo, remote, env, git, commit, exec, cli, cliFail, configure, writer, push, plugin, age, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
-test('agent information probes skip refresh while sessions receive upstream updates', t => {
+test('agent launches never refresh and manual sync pulls the requested update', t => {
   const f = fixture(); t.after(f.cleanup);
   const opencode = path.join(f.home, '.local/bin/opencode');
   write(opencode, '#!/bin/sh\nprintf "original opencode %s\\n" "$*"\n'); fs.chmodSync(opencode, 0o755);
@@ -76,6 +74,8 @@ test('agent information probes skip refresh while sessions receive upstream upda
   }
   f.age();
   assert.equal(f.exec(opencode, ['run', 'hello']).stdout, 'original opencode run hello\n');
+  assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Version one/);
+  f.cli('sync');
   assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Updated before session/);
 });
 
@@ -99,13 +99,13 @@ test('preflights foreign destinations without partial installs', t => {
   assert.match(f.cliFail('configure', f.repo).stderr, /Unmanaged destination/);
   assert.equal(read(foreign), 'Foreign installer content\n'); assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/example')));
 });
-test('dirty or offline startup retains cached delivery', t => {
+test('dirty or offline manual sync reports failure and retains cached delivery', t => {
   const f = fixture(); t.after(f.cleanup); f.configure(); f.age();
-  write(path.join(f.repo, 'instructions/global.md'), 'Unpublished local edit\n'); f.cli('sync', '--startup');
+  write(path.join(f.repo, 'instructions/global.md'), 'Unpublished local edit\n'); f.cliFail('sync');
   const status = healthSchema.parse(json(path.join(f.home, '.local/state/agent-backbone/status.json')));
   assert.equal(status.status, 'stale'); assert.match(status.reason || '', /Unpublished/);
   assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Shared instruction v1/);
-  f.git(f.repo, 'restore', 'instructions/global.md'); f.git(f.repo, 'remote', 'set-url', 'origin', path.join(f.root, 'missing.git')); f.cli('sync', '--startup');
+  f.git(f.repo, 'restore', 'instructions/global.md'); f.git(f.repo, 'remote', 'set-url', 'origin', path.join(f.root, 'missing.git')); f.cliFail('sync');
   assert.ok(fs.existsSync(path.join(f.home, '.agents/skills/example/SKILL.md')));
 });
 test('adopts full assets and installer provenance without removing originals', t => {
@@ -432,7 +432,7 @@ test('per-agent native filters also remove skills from full Claude plugins', t =
   assert.ok(!fs.existsSync(path.join(f.home, '.claude/skills/first')));
   assert.match(read(path.join(f.home, '.claude/CLAUDE.md')), /Disabled skills: first/);
 });
-test('native hooks and extras persist without executing hooks or losing startup refresh', t => {
+test('native hooks and extras persist without executing hooks', t => {
   const f = fixture(); t.after(f.cleanup); f.configure();
   const marker = path.join(f.home, 'hook-executed'), entry = path.join(f.root, 'hook.json');
   write(entry, JSON.stringify({ bindings: { claude: { events: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'touch "' + marker + '"' }] }] } } } }));
@@ -444,103 +444,36 @@ test('native hooks and extras persist without executing hooks or losing startup 
   write(file, JSON.stringify(doc)); f.cli('sync'); f.configure();
   assert.equal(read(path.join(f.home, '.claude/rules/rule.md')), 'Shared fixture rule\n');
   assert.match(read(path.join(f.home, '.claude/settings.json')), /hook-executed/);
-  assert.match(read(path.join(f.home, '.claude/settings.json')), /agent-backbone-refresh/);
+  assert.doesNotMatch(read(path.join(f.home, '.claude/settings.json')), /agent-backbone-refresh/);
   assert.ok(!fs.existsSync(marker));
   assert.match(f.cli('hooks', 'list', '--json', '--global').stdout, /fixture/);
 });
 
-test('a startup refresh right after a successful one is skipped and hooks allow a full refresh', t => {
+test('legacy startup refresh is inert and manual sync never reinstalls it', t => {
   const f = fixture(); t.after(f.cleanup); f.configure();
-  const statusFile = path.join(f.home, '.local/state/agent-backbone/status.json'), before = read(statusFile);
-  const writer = f.writer(); write(path.join(writer, 'instructions/global.md'), 'Shared instruction v2\n'); f.push(writer);
+  const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
+  const own = { type: 'command', command: helper }, foreign = { type: 'command', command: 'echo keep' };
+  for (const relative of ['.claude/settings.json', '.codex/hooks.json', '.grok/hooks/agent-backbone-refresh.json']) {
+    write(path.join(f.home, relative), JSON.stringify({ hooks: { SessionStart: [{ hooks: [own, foreign] }] } }));
+  }
+  write(path.join(f.home, '.cursor/hooks.json'), JSON.stringify({ version: 1, hooks: { sessionStart: [{ command: helper }, { command: 'echo keep' }] } }));
+  write(helper, '#!/bin/sh\nexec agent-backbone sync --startup\n');
+  const plugin = path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js');
+  write(plugin, '// Managed by Agent Backbone\n');
+  const writer = f.writer();
+  write(path.join(writer, 'instructions/global.md'), 'Manual update\n'); f.push(writer);
+  f.cli('cleanup-startup');
+  assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Shared instruction v1/);
   f.cli('sync', '--startup');
-  assert.equal(read(statusFile), before); assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Shared instruction v1/);
-  f.age(); f.cli('sync', '--startup');
-  assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Shared instruction v2/);
-  const timeouts = (file: string) => [...read(file).matchAll(/"timeout": (\d+)/g)].map(match => match[1]);
-  assert.deepEqual(timeouts(path.join(f.home, '.claude/settings.json')), ['120']);
-  assert.deepEqual(timeouts(path.join(f.home, '.codex/hooks.json')), ['120']);
-});
-test('Codex trust hashes cover the sorted compact hook identity', () => {
-  // Mirrors codex-rs hook_hash and version_for_toml.
-  const identity = '{"event_name":"session_start","hooks":[{"async":false,"command":"echo hello","timeout":10,"type":"command"}]}';
-  assert.equal(codexHookTrustHash('session_start', 'echo hello', 10), 'sha256:' + createHash('sha256').update(identity).digest('hex'));
-});
-test('every agent refreshes at session start and no background timer remains', t => {
-  const f = fixture(); t.after(f.cleanup);
-  const legacy = path.join(f.home, 'Library/LaunchAgents/ai.agent-backbone.refresh.plist');
-  write(legacy, '<plist/>\n');
-  write(path.join(f.home, '.cursor/hooks.json'), JSON.stringify({ version: 1, hooks: { sessionStart: [{ command: 'echo keep' }] } }));
-  fs.mkdirSync(path.join(f.home, '.grok'));
-  write(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo keep' }] }] } }));
-  f.configure();
-  const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
-  const grokHook = path.join(f.home, '.grok/hooks/agent-backbone-refresh.json');
-  assert.deepEqual(json(grokHook), { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: helper, timeout: 120 }] }] } });
-  const grokWritten = fs.statSync(grokHook).mtimeMs;
-  const count = (file: string) => read(file).split(helper).length - 1;
-  assert.ok(!fs.existsSync(legacy));
-  assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
-  assert.equal(count(path.join(f.home, '.codex/hooks.json')), 1);
-  assert.match(read(path.join(f.home, '.codex/hooks.json')), /echo keep/);
-  assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
-  assert.match(read(path.join(f.home, '.cursor/hooks.json')), /echo keep/);
-  assert.match(read(path.join(f.home, '.cursor/hooks.json')), /"timeout": 120/);
-  const hooksFile = path.join(f.home, '.codex/hooks.json');
-  const expected = 'sha256:' + createHash('sha256').update(JSON.stringify({ event_name: 'session_start', hooks: [{ async: false, command: helper, timeout: 120, type: 'command' }] })).digest('hex');
-  const trust = '[hooks.state.' + JSON.stringify(hooksFile + ':session_start:1:0') + ']\ntrusted_hash = ' + JSON.stringify(expected);
-  assert.ok(read(path.join(f.home, '.codex/config.toml')).includes(trust));
-  const plugin = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
-  assert.ok(plugin.includes(JSON.stringify(helper)) && plugin.includes('session.created') && plugin.includes('export default') && plugin.includes('id: "agent-backbone-refresh"'));
-  const foreign = '[hooks.state.' + JSON.stringify(hooksFile + ':session_start:5:0') + ']\ntrusted_hash = "sha256:other"';
-  fs.appendFileSync(path.join(f.home, '.codex/config.toml'), '\n' + foreign + '\n');
-  fs.writeFileSync(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: {} }));
-  f.cli('sync');
-  const codexConfig = read(path.join(f.home, '.codex/config.toml'));
-  assert.ok(!codexConfig.includes(trust) && codexConfig.includes(foreign));
-  assert.ok(codexConfig.includes('[hooks.state.' + JSON.stringify(hooksFile + ':session_start:0:0') + ']\ntrusted_hash = ' + JSON.stringify(expected)));
-  assert.equal(count(path.join(f.home, '.codex/hooks.json')), 1);
-  assert.equal(fs.statSync(grokHook).mtimeMs, grokWritten);
-  f.configure();
-  assert.equal(read(path.join(f.home, '.codex/config.toml')).split('trusted_hash').length - 1, 2);
-  assert.ok(read(path.join(f.home, '.codex/config.toml')).includes(foreign));
-  assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
-  assert.equal(count(path.join(f.home, '.cursor/hooks.json')), 1);
-  assert.ok(!fs.existsSync(path.join(f.home, 'Library/LaunchAgents')) || fs.readdirSync(path.join(f.home, 'Library/LaunchAgents')).length === 0);
-});
-
-test('Grok skips the Claude refresh import but keeps its native refresh', t => {
-  const f = fixture(); t.after(f.cleanup); f.configure();
-  const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
-  const writer = f.writer(); skill(path.join(writer, 'skills/example'), 'example', 'Grok refresh'); f.push(writer); f.age();
-  Object.assign(f.env, { GROK_HOOK_EVENT: 'SessionStart' });
-  f.exec(helper, ['--from-claude']);
-  assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Version one/);
-  f.exec(helper, []);
-  assert.match(read(path.join(f.home, '.agents/skills/example/SKILL.md')), /Grok refresh/);
-});
-
-test('OpenCode plugin waits for the first refresh and tolerates a missing helper', async t => {
-  const f = fixture(); t.after(f.cleanup); f.configure();
-  const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
-  const source = read(path.join(f.home, '.config/opencode/plugins/agent-backbone-refresh.js'));
-  const marker = path.join(f.root, 'refreshes'), fake = path.join(f.root, 'fake-refresh');
-  write(fake, '#!/bin/sh\nsleep 1\necho run >> ' + JSON.stringify(marker) + '\n'); fs.chmodSync(fake, 0o755);
-  const load = async (target: string, name: string) => {
-    const file = path.join(f.root, name + '.mjs'); write(file, source.replace(JSON.stringify(helper), JSON.stringify(target)));
-    const loaded: { default: { id: string; setup: (context: unknown) => Promise<() => void> } } = await import(file);
-    return loaded.default;
-  };
-  const events = { event: { subscribe: async function* () { yield { type: 'session.created' }; yield { type: 'session.created' }; } } };
-  const plugin = await load(fake, 'present');
-  assert.equal(plugin.id, 'agent-backbone-refresh');
-  const stop = await plugin.setup(events);
-  assert.equal(read(marker), 'run\n');
-  await new Promise(resolve => setTimeout(resolve, 2500));
-  assert.equal(read(marker), 'run\nrun\n');
-  stop();
-  const missing = await load(path.join(f.root, 'missing-helper'), 'missing');
-  (await missing.setup(events))();
+  assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Shared instruction v1/);
+  assert.ok(!fs.existsSync(helper) && !fs.existsSync(plugin));
+  f.cli('sync'); f.configure();
+  assert.match(read(path.join(f.home, '.codex/AGENTS.md')), /Manual update/);
+  assert.ok(!fs.existsSync(helper) && !fs.existsSync(plugin));
+  for (const relative of ['.claude/settings.json', '.codex/hooks.json', '.cursor/hooks.json', '.grok/hooks/agent-backbone-refresh.json']) {
+    assert.match(read(path.join(f.home, relative)), /echo keep/);
+    assert.doesNotMatch(read(path.join(f.home, relative)), /agent-backbone-refresh/);
+  }
 });
 
 test('shared settings from Git merge into every agent and leave local keys alone', t => {
@@ -558,7 +491,7 @@ test('shared settings from Git merge into every agent and leave local keys alone
   const claude = z.record(z.string(), z.unknown()).parse(json(path.join(f.home, '.claude/settings.json')));
   assert.equal(claude.theme, 'dark'); assert.equal(claude.localOnly, 1); assert.deepEqual(claude.skillOverrides, {});
   assert.deepEqual(claude.enabledPlugins, { 'local@x': true, 'shared@y': false });
-  assert.match(JSON.stringify(claude.hooks), /agent-backbone-refresh/);
+  assert.doesNotMatch(JSON.stringify(claude.hooks) || '', /agent-backbone-refresh/);
   const codex = read(path.join(f.home, '.codex/config.toml'));
   assert.match(codex, /^# my comment\nmodel = "new"\nkeep = 1\napproval_policy = "never"/);
   assert.match(codex, /\[projects\."\/tmp\/p"\]\ntrust_level = "trusted"/);
@@ -600,14 +533,14 @@ test('a settings file that cannot be edited is reported and skipped while the re
   const data = manifestSchema.parse(json(path.join(f.repo, 'backbone.json')));
   write(path.join(f.repo, 'backbone.json'), JSON.stringify({ ...data, refresh: ['touch "$HOME/refreshed"'] }));
   f.push(); f.configure();
-  fs.rmSync(path.join(f.home, 'refreshed')); fs.rmSync(path.join(f.home, '.claude/settings.json'));
+  fs.rmSync(path.join(f.home, 'refreshed')); fs.rmSync(path.join(f.home, '.claude/settings.json'), { force: true });
   const result = f.cli('sync');
   assert.match(result.stderr, new RegExp('Shared settings not applied to ' + grok.replaceAll('.', '\\.') + ': '));
   assert.match(result.stderr, new RegExp('Shared settings not applied to ' + opencode.replaceAll('.', '\\.') + ': '));
   assert.equal(read(grok), 'model = "local"\n[broken\n'); assert.equal(read(opencode), '{ broken');
   assert.match(read(path.join(f.home, '.codex/config.toml')), /model = "new"/);
   assert.ok(fs.existsSync(path.join(f.home, 'refreshed')));
-  assert.match(read(path.join(f.home, '.claude/settings.json')), /agent-backbone-refresh/);
+  assert.ok(!fs.existsSync(path.join(f.home, '.claude/settings.json')));
   assert.equal(healthSchema.parse(json(path.join(f.home, '.local/state/agent-backbone/status.json'))).status, 'current');
 });
 
