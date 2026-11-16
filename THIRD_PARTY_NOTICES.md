@@ -99,7 +99,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 The Homebrew formula and `scripts/download-engine.sh` install the Skillshare binary alongside Agent Backbone.
 
-## skillshare 0.25.11
+## skillshare 0.30.8
 
 MIT License
 
