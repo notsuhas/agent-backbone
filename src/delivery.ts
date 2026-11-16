@@ -80,6 +80,8 @@ function prefixedMetadata(content: string, prefix: string) {
   const metadata = z.object({ name: z.string().min(1) }).passthrough().parse(parseSkillFrontmatter(header[1]!));
   return '---\n' + stringify({ ...metadata, name: prefix + '-' + metadata.name }) + '---\n' + content.slice(header[0].length);
 }
+// Bump when the projection rules change, so existing views are rebuilt instead of reused.
+const projectionFormat = '2';
 function projection(repo: string, data: Manifest, disabled: Set<string>) {
   const skills = sourceSkills(repo, data), activeSkills = new Map<string, string>(), packages = new Map<string, string>();
   const fingerprintsFile = path.join(paths().state, 'projections.json');
@@ -89,7 +91,7 @@ function projection(repo: string, data: Manifest, disabled: Set<string>) {
     const members = [...skills].filter(([, dir]) => inside(source, dir));
     const enabled = members.filter(([name]) => !disabled.has(name));
     if (members.length && !enabled.length) continue;
-    const key = createHash('sha256').update(digest(source)).update(JSON.stringify(members.map(([name]) => [name, disabled.has(name)]))).update(pkg.skill_prefix || '').digest('hex');
+    const key = createHash('sha256').update(digest(source)).update(JSON.stringify(members.map(([name]) => [name, disabled.has(name)]))).update(pkg.skill_prefix || '').update(projectionFormat).digest('hex');
     const target = path.join(paths().active, pkg.name, key);
     if (!exists(target)) {
       const pending = target + '.tmp-' + process.pid;
