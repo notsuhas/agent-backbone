@@ -1,5 +1,5 @@
 #!/bin/sh
-TASK_BACKBONE_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-: "${AGENT_BACKBONE_COMMAND:=$TASK_BACKBONE_ROOT/bin/agent-backbone}"
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+: "${AGENT_BACKBONE_COMMAND:=$root/bin/agent-backbone}"
 export AGENT_BACKBONE_COMMAND
-exec node "$TASK_BACKBONE_ROOT/dist/cli.js" "$@"
+exec node "$root/dist/cli.js" "$@"
