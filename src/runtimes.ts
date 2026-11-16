@@ -1,12 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { type Config } from './model.js';
+import { type Agent, type Config } from './model.js';
 import { contained, digest, exists, paths, readJSON, run, saveJSON } from './files.js';
 
 const versionSchema = z.string().regex(/^\d+\.\d+\.\d+$/);
 const policySchema = z.object({ argent: z.object({ version: versionSchema }).optional() }).strict();
 const installedSchema = z.object({ version: versionSchema });
+// Agent IDs used by the skills installer; without a match it picks detected agents.
+const skillsAgents: Partial<Record<Agent, string>> = { claude: 'claude-code', codex: 'codex', opencode: 'opencode' };
 
 function policy(repo: string) {
   return policySchema.parse(readJSON(contained(repo, 'runtimes.json', false)));
@@ -32,7 +34,8 @@ async function argentSkillsMatch(targets: Config['targets']) {
   });
 }
 
-async function preserveArgentPermissions() {
+// Stops argent update from rewriting editors' auto-approve lists; Backbone and Git own those settings.
+async function disableArgentAllowlist() {
   const file = path.join(paths().home, '.argent/config.json');
   const settings = z.object({ allowlist: z.object({ enabled: z.boolean().optional() }).optional() }).passthrough().parse(readJSON(file));
   if (settings.allowlist?.enabled !== undefined) return;
@@ -65,15 +68,16 @@ export async function syncRuntimes(current: Config) {
   const lock = path.join(process.env.XDG_STATE_HOME || path.join(paths().home, '.agents'), process.env.XDG_STATE_HOME ? 'skills/.skill-lock.json' : '.skill-lock.json');
   const skills = z.object({ skills: z.record(z.string(), z.unknown()).default({}) }).parse(readJSON(lock));
   const tracked = Object.keys(skills.skills).some(name => name.startsWith('argent-'));
-  if (installed) await preserveArgentPermissions();
+  if (installed) await disableArgentAllowlist();
   if (installed === desired.version && tracked && previous.argent?.version === desired.version && await argentSkillsMatch(current.targets)) return;
   const env = { DO_NOT_TRACK: '1', DISABLE_TELEMETRY: '1' };
   const cwd = path.join(paths().state, 'runtime-workspace');
   fs.mkdirSync(cwd, { recursive: true });
   await run(['npx', '--yes', '@swmansion/argent@' + desired.version, 'update', '--global', '--version', desired.version, '--yes', '--no-telemetry'], cwd, 240000, env);
-  await run(['npx', '--yes', 'skills', 'add', 'software-mansion/argent/packages/skills/skills#v' + desired.version, '--skill', '*', '--agent', 'claude-code', 'codex', 'opencode', '--global', '--yes'], cwd, 120000, env);
+  const agents = current.targets.flatMap(agent => skillsAgents[agent] ?? []);
+  await run(['npx', '--yes', 'skills', 'add', 'software-mansion/argent/packages/skills/skills#v' + desired.version, '--skill', '*', ...(agents.length ? ['--agent', ...agents] : []), '--global', '--yes'], cwd, 120000, env);
   if (await installedArgent() !== desired.version) throw new Error('Argent installer did not apply the approved version.');
-  await preserveArgentPermissions();
+  await disableArgentAllowlist();
   if (!await argentSkillsMatch(current.targets)) throw new Error('Argent skills did not match the installed CLI.');
   const updated = z.object({ skills: z.record(z.string(), z.unknown()).default({}) }).parse(readJSON(lock));
   if (!Object.keys(updated.skills).some(name => name.startsWith('argent-'))) throw new Error('Argent skills were not registered by its installer.');
