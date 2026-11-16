@@ -39,7 +39,7 @@ New configurations target Claude, Codex and OpenCode. Choose others with `--agen
 | `cursor` | `~/.cursor/skills` | none | `sessionStart` hook |
 | `gemini` | `~/.gemini/skills` | none | none |
 
-Every target with an executable on `PATH` at configure time also gets a launcher in `~/.local/bin` that refreshes before starting the original executable. Cursor's hook is installed whenever `~/.cursor` exists. Grok reads the Claude and Cursor hook files, so it refreshes too.
+Every target with an executable on `PATH` at configure time also gets a launcher in `~/.local/bin` that refreshes before starting the original executable. Cursor's hook is installed whenever `~/.cursor` exists. When `~/.grok` exists, Grok gets its own `SessionStart` hook file, `~/.grok/hooks/agent-backbone-refresh.json`, because it does not load the Claude or Cursor hooks.
 
 ## Content repository
 
@@ -137,6 +137,7 @@ Run the dashboard through the managed launcher so package filtering stays active
 - `~/.local/bin/skillshare`, `~/.local/bin/<agent>` and `~/.local/bin/agent-backbone-refresh`
 - The refresh entry in `~/.claude/settings.json` and `~/.codex/hooks.json` (`SessionStart`) and `~/.cursor/hooks.json` (`sessionStart`)
 - `~/.config/opencode/plugins/agent-backbone-refresh.js`
+- `~/.grok/hooks/agent-backbone-refresh.json`, when `~/.grok` exists
 - The Codex hook trust record in `~/.codex/config.toml`
 - Configuration in `~/.config/agent-backbone/` and generated skill views in `~/.local/share/agent-backbone/active/`
 - Subagent files listed under Subagents

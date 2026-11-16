@@ -95,6 +95,9 @@ async function sessionRefresh(current: Config) {
     document.version ??= 1;
     saveIfChanged(target, document);
   }
+  if (exists(path.join(home, '.grok'))) {
+    saveIfChanged(path.join(home, '.grok/hooks/agent-backbone-refresh.json'), { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: helper, timeout: hookTimeout }] }] } });
+  }
   await removeTimer();
 }
 // Codex trusts a hook whose SHA-256 of sorted compact JSON identity is in config.toml (codex-rs hook_hash, version_for_toml).

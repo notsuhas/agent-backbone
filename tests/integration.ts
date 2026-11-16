@@ -459,9 +459,13 @@ test('every agent refreshes at session start and no background timer remains', t
   const legacy = path.join(f.home, 'Library/LaunchAgents/ai.agent-backbone.refresh.plist');
   write(legacy, '<plist/>\n');
   write(path.join(f.home, '.cursor/hooks.json'), JSON.stringify({ version: 1, hooks: { sessionStart: [{ command: 'echo keep' }] } }));
+  fs.mkdirSync(path.join(f.home, '.grok'));
   write(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo keep' }] }] } }));
   f.configure();
   const helper = path.join(f.home, '.local/bin/agent-backbone-refresh');
+  const grokHook = path.join(f.home, '.grok/hooks/agent-backbone-refresh.json');
+  assert.deepEqual(json(grokHook), { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: helper, timeout: 120 }] }] } });
+  const grokWritten = fs.statSync(grokHook).mtimeMs;
   const count = (file: string) => read(file).split(helper).length - 1;
   assert.ok(!fs.existsSync(legacy));
   assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
@@ -478,6 +482,7 @@ test('every agent refreshes at session start and no background timer remains', t
   fs.writeFileSync(path.join(f.home, '.codex/hooks.json'), JSON.stringify({ hooks: {} }));
   f.cli('sync');
   assert.equal(count(path.join(f.home, '.codex/hooks.json')), 1);
+  assert.equal(fs.statSync(grokHook).mtimeMs, grokWritten);
   f.configure();
   assert.equal(read(path.join(f.home, '.codex/config.toml')).split('trusted_hash').length - 1, 2);
   assert.equal(count(path.join(f.home, '.claude/settings.json')), 1);
