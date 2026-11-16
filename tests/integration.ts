@@ -432,9 +432,10 @@ test('native hooks and extras persist without executing hooks or losing startup 
   assert.match(f.cli('hooks', 'list', '--json', '--global').stdout, /fixture/);
 });
 
-test('Codex trust hashes match Codex for a known hook', () => {
-  const expected = 'sha256:a01c7756e687aa8674f2a4d3f351d14ae65dd3b8ca19b619378b51afb7c30562';
-  assert.equal(codexHookTrustHash('session_start', "bash '/Users/notsuhas/.codex/herdr-agent-state.sh' session", 10), expected);
+test('Codex trust hashes cover the sorted compact hook identity', () => {
+  // Mirrors codex-rs hook_hash and version_for_toml.
+  const identity = '{"event_name":"session_start","hooks":[{"async":false,"command":"echo hello","timeout":10,"type":"command"}]}';
+  assert.equal(codexHookTrustHash('session_start', 'echo hello', 10), 'sha256:' + createHash('sha256').update(identity).digest('hex'));
 });
 test('every agent refreshes at session start and no background timer remains', t => {
   const f = fixture(); t.after(f.cleanup);
