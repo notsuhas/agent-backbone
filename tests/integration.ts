@@ -618,6 +618,19 @@ test('TOML settings replace whole multi-line values and refuse dotted keys and i
   assert.equal(read(grok), 'features = { hooks = false }\n');
 });
 
+test('a disabled skill nested inside an enabled one is not delivered as its own skill', t => {
+  const f = fixture(); t.after(f.cleanup);
+  skill(path.join(f.repo, 'skills/parent'), 'parent');
+  skill(path.join(f.repo, 'skills/parent/refs/child'), 'child');
+  write(path.join(f.repo, 'skills/.skillignore'), 'parent/refs/*\n');
+  f.push(); f.configure();
+  for (const dir of ['.claude/skills', '.agents/skills', '.config/opencode/skills']) {
+    assert.ok(fs.existsSync(path.join(f.home, dir, 'parent/SKILL.md')), dir);
+    assert.ok(fs.existsSync(path.join(f.home, dir, 'parent/refs/child/SKILL.md')), dir);
+    assert.ok(!fs.existsSync(path.join(f.home, dir, 'parent__refs__child')), dir);
+  }
+});
+
 test('subagents reach every harness in its own format and refresh commands run', t => {
   const f = fixture(); t.after(f.cleanup);
   fs.mkdirSync(path.join(f.home, '.cursor'), { recursive: true }); fs.mkdirSync(path.join(f.home, '.grok'), { recursive: true });

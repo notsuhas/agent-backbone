@@ -255,7 +255,10 @@ export async function apply(options: { repo: string; data: Manifest; agents: Age
   for (const agent of agents) {
     const settings = engineTarget(native, agent).settings;
     const excludes = [...z.array(z.string()).parse(settings.exclude || []), ...[...allSkills.keys()].filter(id => !selections.get(agent)?.has(id))];
-    targets[agent] = { ...engineTarget(native, agent).target, skills: { ...settings, path: rootFor(agent), enabled: activeAgents.includes(agent), ...(agent === 'claude' ? { exclude: [...new Set([...excludes, ...pluginSkills])].sort() } : {}) } };
+    // A disabled skill nested inside an enabled one stays in the view (its parent reads it), so exclude its flattened name.
+    const nested = disabled.filter(id => id.includes('/')).map(id => id.replaceAll('/', '__'));
+    const exclude = [...new Set([...(agent === 'claude' ? [...excludes, ...pluginSkills] : z.array(z.string()).parse(settings.exclude || [])), ...nested])].sort();
+    targets[agent] = { ...engineTarget(native, agent).target, skills: { ...settings, path: rootFor(agent), enabled: activeAgents.includes(agent), ...(exclude.length ? { exclude } : {}) } };
   }
   const sources = z.record(z.string(), z.unknown()).parse(native.sources || {});
   const extras = z.array(z.record(z.string(), z.unknown())).parse(native.extras || []).filter(extra => typeof extra.name !== 'string' || !extra.name.startsWith('agent-backbone-'));
