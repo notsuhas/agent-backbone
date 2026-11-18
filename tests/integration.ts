@@ -61,7 +61,10 @@ test('agent launches never refresh and manual sync pulls the requested update', 
   const f = fixture(); t.after(f.cleanup);
   const opencode = path.join(f.home, '.local/bin/opencode');
   write(opencode, '#!/bin/sh\nprintf "original opencode %s\\n" "$*"\n'); fs.chmodSync(opencode, 0o755);
+  const executables = ['claude', 'codex', 'opencode'].map(agent => path.join(f.home, '.local/bin', agent));
+  const originals = executables.map(read);
   f.configure();
+  assert.deepEqual(executables.map(read), originals);
   const writer = f.writer();
   skill(path.join(writer, 'skills/example'), 'example', 'Updated before session'); f.push(writer);
   for (const agent of ['claude', 'codex', 'opencode']) {
@@ -617,7 +620,7 @@ test('a removed TOML setting in another form stays managed until it can be remov
   assert.deepEqual(managed(), [['model']]);
 });
 
-test('a native agent registered by version launches the newest installed version', t => {
+test('configure preserves the stock agent symlink and explicit launch resolves installed versions', t => {
   const f = fixture(); t.after(f.cleanup);
   const versions = path.join(f.home, '.local/share/claude/versions');
   for (const version of ['2.1.9', '2.1.10']) { write(path.join(versions, version), '#!/bin/sh\nprintf "claude ' + version + '\\n"\n'); fs.chmodSync(path.join(versions, version), 0o755); }
@@ -626,7 +629,9 @@ test('a native agent registered by version launches the newest installed version
   write(path.join(versions, '2.1.11'), ''); fs.chmodSync(path.join(versions, '2.1.11'), 0o755);
   write(path.join(versions, '2.1.12'), 'unfinished'); fs.chmodSync(path.join(versions, '2.1.12'), 0o644);
   fs.symlinkSync(path.join(versions, 'missing'), path.join(versions, '2.1.13'));
-  assert.equal(f.exec(path.join(f.home, '.local/bin/claude'), ['--version']).stdout, 'claude 2.1.10\n');
+  assert.equal(fs.readlinkSync(path.join(f.home, '.local/bin/claude')), path.join(versions, '2.1.9'));
+  assert.equal(f.exec(path.join(f.home, '.local/bin/claude'), ['--version']).stdout, 'claude 2.1.9\n');
+  assert.equal(f.cli('launch', 'claude', '--version').stdout, 'claude 2.1.10\n');
 });
 
 test('TOML headers with brackets inside quoted keys keep keys in their own table', t => {

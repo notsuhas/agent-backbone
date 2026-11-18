@@ -39,7 +39,7 @@ New configurations target Claude, Codex and OpenCode. Choose others with `--agen
 | `cursor` | `~/.cursor/skills` | none |
 | `gemini` | `~/.gemini/skills` | none |
 
-Agent launchers run the original executable without syncing. Native versioned installations still use the newest executable version. Configure and manual sync remove Backbone's legacy startup hooks, OpenCode refresh plugin, refresh helper and timer. Other hooks remain intact. `agent-backbone cleanup-startup` performs that cleanup without pulling content.
+Configure leaves agent CLI executables and symlinks unchanged. The optional `agent-backbone launch` command runs a registered executable without syncing. Configure and manual sync remove Backbone's legacy startup hooks, OpenCode refresh plugin, refresh helper and timer. Other hooks remain intact. `agent-backbone cleanup-startup` performs that cleanup without pulling content.
 
 ## Content repository
 
@@ -154,14 +154,14 @@ Run the dashboard through the managed launcher so package filtering stays active
 
 ## Files Backbone writes
 
-- `~/.local/bin/skillshare` and passthrough agent launchers in `~/.local/bin/`
+- `~/.local/bin/skillshare`; agent CLI executables and symlinks remain unchanged
 - Configuration in `~/.config/agent-backbone/` and generated skill views in `~/.local/share/agent-backbone/active/`
 - Subagent files listed under Subagents
 - State under `~/.local/state/agent-backbone/`, including the ledgers `settings-managed.json` and `subagents-managed.json`
 
-Each configure, refresh, toggle and upstream update saves what it replaces in a new `backup-*`, `sync-backup-*`, `toggle-backup-*`, `native-backup-*` or `upstream-backup-*` directory under `~/.local/state/agent-backbone/`. The configure backup holds the original `skillshare` and agent executables.
+Each configure, refresh, toggle and upstream update saves what it replaces in a new `backup-*`, `sync-backup-*`, `toggle-backup-*`, `native-backup-*` or `upstream-backup-*` directory under `~/.local/state/agent-backbone/`. The configure backup holds the original `skillshare` executable.
 
-Homebrew uninstall removes the tool, not content or state. Before uninstalling, remove the launchers above and restore the originals from the configure backup.
+Homebrew uninstall removes the tool, not content or state. Before uninstalling, remove the Skillshare launcher and restore its original from the configure backup.
 
 ## Development
 

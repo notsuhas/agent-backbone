@@ -26,12 +26,6 @@ async function installIntegration(current: Config) {
     fs.renameSync(skillshare, path.join(current.backup, 'original-skillshare'));
   }
   atomicWrite(skillshare, bridge); fs.chmodSync(skillshare, 0o755);
-  for (const agent of current.targets) {
-    if (!current.agents[agent]) continue;
-    const file = path.join(bin, agent);
-    atomicWrite(file, '#!/bin/sh\nexec ' + quote(current.command) + ' launch ' + quote(agent) + ' -- "$@"\n');
-    fs.chmodSync(file, 0o755);
-  }
   const settings = path.join(home, '.claude/settings.json');
   if (current.targets.includes('claude') && exists(settings)) fs.copyFileSync(isLink(settings) ? real(settings) : settings, path.join(current.backup, 'claude-settings.json'));
   await removeStartupRefresh();
@@ -103,13 +97,11 @@ export async function configure(options: IConfigure) {
     await prepareEngine(seed, data);
     const disabled = await engineSelection(seed, data);
     const managed = await apply({ repo, data, agents, ...(previous ? { previous } : {}), backup, engine, disabled });
-    const originals = { ...previous?.agents }, bin = path.join(home, '.local/bin');
-    fs.mkdirSync(bin, { recursive: true });
+    const originals = { ...previous?.agents };
     for (const agent of agents) {
       if (originals[agent]) continue;
-      const current = path.join(bin, agent), found = which(agent);
-      if (exists(current) || isLink(current)) { const target = path.join(backup, 'original-' + agent); fs.renameSync(current, target); originals[agent] = target; }
-      else if (found) originals[agent] = found;
+      const found = which(agent);
+      if (found) originals[agent] = found;
     }
     const current = configSchema.parse({ repo, agents: originals, targets: agents, engine, command: commandPath(), managed_links: managed, disabled_skills: disabled, backup });
     recordCopies(current);
